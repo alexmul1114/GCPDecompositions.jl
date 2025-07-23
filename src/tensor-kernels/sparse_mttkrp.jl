@@ -1,10 +1,10 @@
 ## Tensor Kernel: sparse_mttkrp
 
 """
-    sparse mttkrp!(G, X, (U1, U2, ..., UN), n)
+    sparse mttkrp!(G, Y, (U1, U2, ..., UN), n)
 
 Compute the Matricized Tensor Times Khatri-Rao Product (MTTKRP)
-of a sparse N-way tensor X using the exploded factor matrices U1, U2, ..., UN along mode n, 
+of a sparse N-way tensor Y using the exploded factor matrices U1, U2, ..., UN along mode n, 
 using the value in Y_samples which are samples of Y at the indices given 
 by sample_idxs, and store the result in G.
 

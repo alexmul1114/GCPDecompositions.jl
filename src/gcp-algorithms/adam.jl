@@ -85,7 +85,8 @@ function _symgcp(
 
     # For stratified sampling, keep list of indices where data tensor is nonzero
     if algorithm.sampling_strategy == "stratified"
-        nonzero_idxs = findall(!=(0), X)
+        #nonzero_idxs = findall(!=(0), X)
+        nonzero_idxs = findall(!iszero, X)
         p = algorithm.p
         q = algorithm.q
     end
