@@ -64,6 +64,46 @@ Return the domain of the entrywise loss function `loss`.
 """
 function domain end
 
+"""
+    AbstractRegularizer
+
+Abstract type for regularizer ``r(U)``,
+where U is ntuple of factor matrices for each mode
+
+Concrete types `ConcreteRegularizer <: AbstractRegularizer` should implement:
+
+  - `value(loss::ConcreteRegularizer, U)` that computes the value of the regularizer function ``r(C)``
+  - `grad_U(loss::ConcreteRegularizer, U)` that computes the value of gradient ``\\nabla_U r(C)`` 
+    for factor matrices ``U`` 
+  - `grad_U!(GU, loss::ConcreteRegularizer, U)` that computes the value of gradient ``\\nabla_U r(C)`` 
+    for factor matrices ``U`` and stores the results in GU
+"""
+abstract type AbstractRegularizer end
+
+"""
+    value(regularizer, U)
+
+Compute the value of the regularization penalty given by `regularizer`
+for factor matrices U
+"""
+function value end
+
+"""
+    grad_U(regularizer, C)
+
+Compute the gradient ``\\nabla_U r(C)`` of the regularization penalty given by `regularizer` r
+for factor matrices U
+"""
+function grad_U end
+
+"""
+    grad_U!(GU, regularizer, C)
+
+Compute the gradient ``\\nabla_U r(C)`` of the regularization penalty given by `regularizer` r
+for factor matrices U, store results in GU
+"""
+function grad_U! end
+
 # Objective function and gradients
 
 """
@@ -389,3 +429,30 @@ deriv(loss::UserDefined, x, m) = loss.deriv(x, m)
 domain(loss::UserDefined) = loss.domain
 
 end
+
+# Column-norm regularization
+"""
+    ColumnNormRegularizer
+
+Type for regularizing norms of columns of factor matrices for
+deviating from constant α, with penalty term γ
+
+"""
+struct ColumnNormRegularizer{S<:Real, T<:Real} <: AbstractRegularizer
+    γ::S
+    α::T
+    function ColumnNormRegularizer{S,T}(γ::S, α::T) where {S<:Real,T<:Real}
+        γ >= zero(γ) || 
+            throw(DomainError(γ, "ColumnNormRegularizer requires nonnegative `γ`"))
+        α >= zero(α) || 
+            throw(DomainError(α, "ColumnNormRegularizer requires nonnegative `α`"))
+        return new(λ, α)
+    end 
+end
+ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
+value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(M.U[n][:, r])^2 - reg.α)^2 for r in 1:ncomps(M)) for n in 1:ndims(M))
+function grad_U(reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TU<:AbstractMatrix{T}}
+    return
+end
+
+
