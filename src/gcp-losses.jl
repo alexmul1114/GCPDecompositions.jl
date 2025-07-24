@@ -16,21 +16,35 @@ import ForwardDiff
 """
     AbstractLoss
 
-Abstract type for GCP loss functions ``f(x,m)``,
-where ``x`` is the data entry and ``m`` is the model entry.
+Abstract type for GCP loss functions ``F(X,M)``,
+where ``X`` is the data tensor and ``M`` is the model tensor.
 
 Concrete types `ConcreteLoss <: AbstractLoss` should implement:
 
-  - `value(loss::ConcreteLoss, x, m)` that computes the value of the loss function ``f(x,m)``
-  - `deriv(loss::ConcreteLoss, x, m)` that computes the value of the partial derivative ``\\partial_m f(x,m)`` with respect to ``m``
-  - `domain(loss::ConcreteLoss)` that returns an `Interval` from IntervalSets.jl defining the domain for ``m``
+  - `value(loss::ConcreteLoss, X, M)` that computes the value of the  loss function ``F(X,M)``
+  - `grad_M(loss::ConcreteLoss, X, M)` that computes the gradient of ``F(X,M)`` with respect to ``M``
+  - `domain(loss::ConcreteLoss)` that returns an `Interval` from IntervalSets.jl defining the domain for ``M``
 """
 abstract type AbstractLoss end
 
 """
+    AbstractEntrywiseLoss
+
+Abstract type for entrywise GCP loss functions ``f(x,m)``,
+where ``x`` is the data entry and ``m`` is the model entry.
+
+Concrete types `ConcreteEntrywiseLoss <: AbstractEntrywiseLoss` should implement:
+
+  - `value(loss::ConcreteEntrywiseLoss, x, m)` that computes the value of the entrywise loss function ``f(x,m)``
+  - `deriv(loss::ConcreteEntrywiseLoss, x, m)` that computes the value of the partial derivative ``\\partial_m f(x,m)`` with respect to ``m``
+  - `domain(loss::ConcreteEntrywiseLoss)` that returns an `Interval` from IntervalSets.jl defining the domain for ``m``
+"""
+abstract type AbstractEntrywiseLoss <: AbstractLoss end
+
+"""
     value(loss, x, m)
 
-Compute the value of the (entrywise) loss function `loss`
+Compute the value of the entrywise loss function `loss`
 for data entry `x` and model entry `m`.
 """
 function value end
@@ -38,7 +52,7 @@ function value end
 """
     deriv(loss, x, m)
 
-Compute the derivative of the (entrywise) loss function `loss`
+Compute the derivative of the entrywise loss function `loss`
 at the model entry `m` for the data entry `x`.
 """
 function deriv end
@@ -46,7 +60,7 @@ function deriv end
 """
     domain(loss)
 
-Return the domain of the (entrywise) loss function `loss`.
+Return the domain of the entrywise loss function `loss`.
 """
 function domain end
 
@@ -100,7 +114,7 @@ with mean given by the low-rank model tensor `M`.
   - **Loss function:** ``f(x,m) = (x-m)^2``
   - **Domain:** ``m \\in \\mathbb{R}``
 """
-struct LeastSquares <: AbstractLoss end
+struct LeastSquares <: AbstractEntrywiseLoss end
 value(::LeastSquares, x, m) = (x - m)^2
 deriv(::LeastSquares, x, m) = 2 * (m - x)
 domain(::LeastSquares) = Interval(-Inf, +Inf)
@@ -117,7 +131,7 @@ with nonnegative mean given by the low-rank model tensor `M`.
   - **Loss function:** ``f(x,m) = (x-m)^2``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct NonnegativeLeastSquares <: AbstractLoss end
+struct NonnegativeLeastSquares <: AbstractEntrywiseLoss end
 value(::NonnegativeLeastSquares, x, m) = (x - m)^2
 deriv(::NonnegativeLeastSquares, x, m) = 2 * (m - x)
 domain(::NonnegativeLeastSquares) = Interval(0.0, Inf)
@@ -133,7 +147,7 @@ with rate given by the low-rank model tensor `M`.
   - **Loss function:** ``f(x,m) = m - x \\log(m + \\epsilon)``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct Poisson{T<:Real} <: AbstractLoss
+struct Poisson{T<:Real} <: AbstractEntrywiseLoss
     eps::T
     Poisson{T}(eps::T) where {T<:Real} =
         eps >= zero(eps) ? new(eps) :
@@ -155,7 +169,7 @@ with log-rate given by the low-rank model tensor `M`.
   - **Loss function:** ``f(x,m) = e^m - x m``
   - **Domain:** ``m \\in \\mathbb{R}``
 """
-struct PoissonLog <: AbstractLoss end
+struct PoissonLog <: AbstractEntrywiseLoss end
 value(::PoissonLog, x, m) = exp(m) - x * m
 deriv(::PoissonLog, x, m) = exp(m) - x
 domain(::PoissonLog) = Interval(-Inf, +Inf)
@@ -171,7 +185,7 @@ with scale given by the low-rank model tensor `M`.
 - **Loss function:** ``f(x,m) = \\frac{x}{m + \\epsilon} + \\log(m + \\epsilon)``
 - **Domain:** ``m \\in [0, \\infty)``
 """
-struct Gamma{T<:Real} <: AbstractLoss
+struct Gamma{T<:Real} <: AbstractEntrywiseLoss
     eps::T
     Gamma{T}(eps::T) where {T<:Real} =
         eps >= zero(eps) ? new(eps) :
@@ -193,7 +207,7 @@ with sacle given by the low-rank model tensor `M`
   - **Loss function:** ``f(x, m) = 2\\log(m + \\epsilon) + \\frac{\\pi}{4}(\\frac{x}{m + \\epsilon})^2``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct Rayleigh{T<:Real} <: AbstractLoss
+struct Rayleigh{T<:Real} <: AbstractEntrywiseLoss
     eps::T
     Rayleigh{T}(eps::T) where {T<:Real} =
         eps >= zero(eps) ? new(eps) :
@@ -215,7 +229,7 @@ with odds-sucess rate given by the low-rank model tensor `M`
   - **Loss function:** ``f(x, m) = \\log(m + 1) - x\\log(m + \\epsilon)``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct BernoulliOdds{T<:Real} <: AbstractLoss
+struct BernoulliOdds{T<:Real} <: AbstractEntrywiseLoss
     eps::T
     BernoulliOdds{T}(eps::T) where {T<:Real} =
         eps >= zero(eps) ? new(eps) :
@@ -237,7 +251,7 @@ with log odds-success rate given by the low-rank model tensor `M`
   - **Loss function:** ``f(x, m) = \\log(1 + e^m) - xm``
   - **Domain:** ``m \\in \\mathbb{R}``
 """
-struct BernoulliLogit{T<:Real} <: AbstractLoss
+struct BernoulliLogit{T<:Real} <: AbstractEntrywiseLoss
     eps::T
     BernoulliLogit{T}(eps::T) where {T<:Real} =
         eps >= zero(eps) ? new(eps) :
@@ -259,7 +273,7 @@ data `X` with log odds failure rate given by the low-rank model tensor `M`
   - **Loss function:** ``f(x, m) = (r + x) \\log(1 + m) - x\\log(m + \\epsilon) ``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct NegativeBinomialOdds{S<:Integer,T<:Real} <: AbstractLoss
+struct NegativeBinomialOdds{S<:Integer,T<:Real} <: AbstractEntrywiseLoss
     r::S
     eps::T
     function NegativeBinomialOdds{S,T}(r::S, eps::T) where {S<:Integer,T<:Real}
@@ -284,7 +298,7 @@ domain(::NegativeBinomialOdds) = Interval(0.0, +Inf)
   - **Loss function:** ``f(x, m) = (x - m)^2 if \\abs(x - m)\\leq\\Delta, 2\\Delta\\abs(x - m) - \\Delta^2 otherwise``
   - **Domain:** ``m \\in \\mathbb{R}``
 """
-struct Huber{T<:Real} <: AbstractLoss
+struct Huber{T<:Real} <: AbstractEntrywiseLoss
     Δ::T
     Huber{T}(Δ::T) where {T<:Real} =
         Δ >= zero(Δ) ? new(Δ) : throw(DomainError(Δ, "Huber requires nonnegative `Δ`"))
@@ -307,7 +321,7 @@ domain(::Huber) = Interval(-Inf, +Inf)
                             \\frac{x}{m} + \\log(m) if \\beta = 0``
   - **Domain:** ``m \\in [0, \\infty)``
 """
-struct BetaDivergence{S<:Real,T<:Real} <: AbstractLoss
+struct BetaDivergence{S<:Real,T<:Real} <: AbstractEntrywiseLoss
     β::T
     eps::T
     BetaDivergence{S,T}(β::S, eps::T) where {S<:Real,T<:Real} =
@@ -339,12 +353,12 @@ domain(::BetaDivergence) = Interval(0.0, +Inf)
 """
     UserDefined
 
-Type for user-defined loss functions ``f(x,m)``,
+Type for user-defined entrywise loss functions ``f(x,m)``,
 where ``x`` is the data entry and ``m`` is the model entry.
 
 Contains three fields:
 
- 1. `func::Function`   : function that evaluates the loss function ``f(x,m)``
+ 1. `func::Function`   : function that evaluates the entrywise loss function ``f(x,m)``
  2. `deriv::Function`  : function that evaluates the partial derivative ``\\partial_m f(x,m)`` with respect to ``m``
  3. `domain::Interval` : `Interval` from IntervalSets.jl defining the domain for ``m``
 
@@ -354,7 +368,7 @@ If not provided,
   - `deriv` is automatically computed from `func` using forward-mode automatic differentiation
   - `domain` gets a default value of `Interval(-Inf, +Inf)`
 """
-struct UserDefined <: AbstractLoss
+struct UserDefined <: AbstractEntrywiseLoss
     func::Function
     deriv::Function
     domain::Interval
