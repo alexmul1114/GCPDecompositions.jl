@@ -136,10 +136,7 @@ function grad_U_λ!(
             end
         end
         rmul!(GU_λ[j], Diagonal(M.λ))
-        norm_reg_factor = zeros(size(GU_λ[j]))
-        for r in 1:ncomps(M)
-            norm_reg_factor[:, r] = 4γ * (norm(M.U[j][:, r])^2 - 1) * M.U[j][:, r]
-        end
+        norm_reg_factor = mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[j]; dims=1)
         GU_λ[j] .= GU_λ[j] + norm_reg_factor
     end
 
