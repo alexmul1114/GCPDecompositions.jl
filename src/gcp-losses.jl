@@ -89,14 +89,6 @@ for factor matrices U
 function value end
 
 """
-    grad_U(regularizer, C)
-
-Compute the gradient ``\\nabla_U r(C)`` of the regularization penalty given by `regularizer` r
-for factor matrices U
-"""
-function grad_U end
-
-"""
     grad_U!(GU, regularizer, C)
 
 Compute the gradient ``\\nabla_U r(C)`` of the regularization penalty given by `regularizer` r
@@ -450,9 +442,15 @@ struct ColumnNormRegularizer{S<:Real, T<:Real} <: AbstractRegularizer
     end 
 end
 ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
-value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(M.U[n][:, r])^2 - reg.α)^2 for r in 1:ncomps(M)) for n in 1:ndims(M))
-function grad_U(reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TU<:AbstractMatrix{T}}
-    return
+value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(U[n][:, r])^2 - reg.α)^2 for r in 1:size(U[1])[2]) for n in eachindex(U))
+function grad_U!(GU::NTuple{N,TU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TU<:AbstractMatrix{T}}
+    ncomps = size(U[1])[2]
+    for n in eachindex(U)
+        GU[n] .= zeros(size(U[n]))
+        for r in 1:ncomps
+            GU[n][:, r] .+= 4 * reg.γ * (norm(U[n][:, r])^2 - reg.α) * U[n][:, r]
+        end
+    end
 end
 
 
