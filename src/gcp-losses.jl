@@ -444,13 +444,29 @@ end
 ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
 value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(U[n][:, r])^2 - reg.α)^2 for r in 1:size(U[1])[2]) for n in eachindex(U))
 function grad_U!(GU::NTuple{N,TU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TU<:AbstractMatrix{T}}
-    ncomps = size(U[1])[2]
     for n in eachindex(U)
-        GU[n] .= zeros(size(U[n]))
-        for r in 1:ncomps
-            GU[n][:, r] .+= 4 * reg.γ * (norm(U[n][:, r])^2 - reg.α) * U[n][:, r]
-        end
+        GU[n] .= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, U[j]; dims=1)
     end
+    return GU
 end
 
 
+# Entrywise loss with regularization
+"""
+    RegularizedEntrywiseLoss
+
+Type for regularizing norms of columns of factor matrices for
+deviating from constant α, with penalty term γ
+
+"""
+struct RegularizedEntrywiseLoss{S<:AbstractEntrywiseLoss, T<:AbstractRegularizer} <: AbstractLoss
+    entrywise_loss::S
+    reg::T
+end
+function value(loss::RegularizedEntrywiseLoss, X, M)
+    return sum(I -> value(loss.entrywise_loss, X[I], M[I]), CartesianIndices(X)) + value(loss.reg, M.U)
+end
+function grad_M(loss::RegularizedEntrywiseLoss, X, M)
+    GU = ntuple(i -> similar(U[i]), length(U))
+    return grad_U!(GU, M, X, loss.entrywise_loss) + grad_U!(GU, loss.reg, M.U)
+end
