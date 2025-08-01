@@ -9,7 +9,8 @@ using ..GCPDecompositions
 using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, checksym, khatrirao, sparse_mttkrp!
 using IntervalSets: Interval
 using LinearAlgebra: mul!, rmul!, Diagonal, norm
-using SparseArrays: spzeros
+using SparseArrays: spzeros, sparse
+using StatsBase: countmap
 #using SparseArrayKit
 import ForwardDiff
 
@@ -171,10 +172,10 @@ function stochastic_grad_U_λ!(
 ) where {T,TX,N,K}
     
     ζ = length(X) - η
-    B_unique = unique(B)   # Since we are sampling with replacement
-    idx_counts = [count(==(I), B) for I in B_unique]   # Number of times each idx was sampled
-    sample_vals = zeros(T, length(B_unique))     # Will contain entries of elementwise derivative tensor at indices given by B
-    for (i, (element_idx, num_sampled)) in enumerate(zip(B_unique, idx_counts))
+    idx_counts = countmap(B)
+    sample_vals = zeros(T, length(keys(idx_counts)))   # Will contain entries of elementwise derivative tensor at indices given by B
+    for (i, element_idx) in enumerate(keys(idx_counts))
+        num_sampled = idx_counts[element_idx]
         if sampling_strategy == "uniform"
             sample_vals[i] = num_sampled * (length(X) / length(B)) .* deriv(loss, X[element_idx], M[element_idx])  # Compute elementwise derivative
         elseif sampling_strategy == "stratified"
@@ -190,34 +191,33 @@ function stochastic_grad_U_λ!(
         end
     end
 
+    row_indices = Vector{Vector{Int}}(undef, N)
+    for mode in 1:N
+        row_indices[mode] = [idx[mode] for idx in keys(idx_counts)]
+    end
+    Y_hat_col_indices = collect(1:length(keys(idx_counts)))
+
     # Form exploded factor matrices
-    mode_Us = tuple([M.U[k] for k in M.S]...)  # Collect factor matrix for each mode
-    U_exp = tuple([U[[B_unique[i][n] for i in eachindex(B_unique)], :] for (n, U) in enumerate(mode_Us)]...)
+    U_exp = tuple([M.U[σ_n][row_indices[n], :] for (n, σ_n) in enumerate(M.S)]...)
 
     # Factor matrix gradients
     for j in 1:K
         if sym_data
             # Form Y_hat
             first_n = findall(M.S .== j)[1]
-            Y_hat = spzeros(T, size(X)[first_n], length(B_unique))
-            for (sample_idx, indices) in enumerate(B_unique)
-                Y_hat[indices[first_n], sample_idx] = sample_vals[sample_idx]
-            end
+            Y_hat = sparse(row_indices[first_n], Y_hat_col_indices, sample_vals, size(GU_λ[j])[1], length(keys(idx_counts)))
             sparse_mttkrp!(GU_λ[j], Y_hat, U_exp, first_n)
             rmul!(GU_λ[j], count(M.S .== j))
         else
             for (index, mode) in enumerate(findall(M.S .== j))
                 # Form Y_hat
-                Y_hat = spzeros(T, size(X)[mode], length(B_unique))
-                for (sample_idx, indices) in enumerate(B_unique)
-                    Y_hat[indices[mode], sample_idx] = sample_vals[sample_idx]
-                end
+                Y_hat = sparse(row_indices[mode], Y_hat_col_indices, sample_vals, size(GU_λ[j])[1], length(keys(idx_counts)))
                 if index == 1  # Overwrite
                     sparse_mttkrp!(GU_λ[j], Y_hat, U_exp, mode)
                 else  # Add in-place
                     added_factor = similar(GU_λ[j])
                     sparse_mttkrp!(added_factor, Y_hat, U_exp, mode)
-                    GU_λ[j] .= GU_λ[j] + added_factor
+                    GU_λ[j] .+= added_factor
                 end
             end
         end
