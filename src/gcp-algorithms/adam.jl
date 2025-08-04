@@ -106,6 +106,7 @@ function _symgcp(
     push!(iter_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
     
     time_start = time()
+    iter = 0
 
     while c <= algorithm.κ
 
@@ -174,9 +175,13 @@ function _symgcp(
 
             t += 1
 
-            push!(iter_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
-            push!(iter_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
-            push!(iter_times, time() - time_start)
+            # Track loss every 100 iterations
+            if iter % 100 == 0
+                push!(iter_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
+                push!(iter_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
+                push!(iter_times, time() - time_start)
+            end
+            iter += 1
 
         end
         #total_iters += algorithm.τ

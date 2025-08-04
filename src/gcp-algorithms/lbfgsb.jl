@@ -136,13 +136,18 @@ function _symgcp(
     reg_term_losses = []
     times = []
     t0 = time()
+    iter = 0
 
     function f(u_λ)
         U = map(range -> reshape(view(u_λ, range), :, r), vec_ranges[1:length(vec_ranges)-1])
         λ = view(u_λ, vec_ranges[length(vec_ranges)])
-        push!(losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0)) 
-        push!(reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
-        push!(times, time() - t0)
+        # Track loss every 100 iterations
+        if iter % 100 == 0
+            push!(losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0)) 
+            push!(reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
+            push!(times, time() - t0)
+        end
+        iter += 1
         return GCPLosses.objective(SymCPD(λ, U, S), X, loss, γ)
     end
 
