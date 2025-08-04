@@ -85,8 +85,10 @@ function _symgcp(
 
     # For stratified sampling, keep list of indices where data tensor is nonzero
     if algorithm.sampling_strategy == "stratified"
-        #nonzero_idxs = findall(!=(0), X)
         nonzero_idxs = findall(!iszero, X)
+        length(nonzero_idxs) > 0 || error(
+            "You have selected stratified sampling in a tensor with no zeros!",
+        )
         p = algorithm.p
         q = algorithm.q
     end
@@ -97,21 +99,16 @@ function _symgcp(
     # TODO: Estimate loss from fixed set of samples
     # (For now, just use entire tensor)
     F_hat = GCPLosses.objective(SymCPD(λ, U, S), X, loss, γ)
-    epoch_losses = [] # Record loss from objective function (no regularization)
-    epoch_reg_term_losses = [] # Record loss from regularization term
-    epoch_times = [] # Record total elapsed time after every epoch
-    push!(epoch_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
-   
-    push!(epoch_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
-    
-    epochs = 1
+    iter_losses = [] # Record loss from objective function (no regularization)
+    iter_reg_term_losses = [] # Record loss from regularization term
+    iter_times = [] # Record total elapsed time after every iteration
+    push!(iter_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
+    push!(iter_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
     
     time_start = time()
-    # Temporarily add global stopping criterion for experiments
-    total_iters = 0
-    max_iters = 10000000000. # Temporary
-    while c <= algorithm.κ && total_iters < max_iters
-        
+
+    while c <= algorithm.κ
+
         #  Save copies of factor matrices and weights, first- and second-order moment estimates in case of failed epoch
         U_old = deepcopy(U)
         λ_old = deepcopy(λ)
@@ -124,18 +121,19 @@ function _symgcp(
         F_hat_old = deepcopy(F_hat)
         
         for _ in 1:algorithm.τ
-
             # Sample elements 
             if algorithm.sampling_strategy == "uniform"
-                B = [CartesianIndex([rand(1:I) for I in size(X)]...) for _ in 1:algorithm.s]
+                B = Vector{CartesianIndex}(undef, algorithm.s)
+                sample!(CartesianIndices(X), B)
             elseif algorithm.sampling_strategy == "stratified"
                 B = Vector{CartesianIndex}(undef, p+q)
-                B[1:p] = rand(nonzero_idxs, p)            # Sample p nonzero entries (with replacement)
+                # Sample p nonzero entries (with replacement)
+                B[1:p] = rand(nonzero_idxs, p)           
                 # Sample q zero entries (with replacement)
                 zero_count = 0
                 while zero_count < q
                     candidate_idx = rand(CartesianIndices(X)) 
-                    if X[candidate_idx] == 0
+                    if iszero(X[candidate_idx])
                         B[p+1+zero_count] = candidate_idx
                         zero_count += 1
                     end
@@ -176,14 +174,16 @@ function _symgcp(
 
             t += 1
 
+            push!(iter_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
+            push!(iter_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
+            push!(iter_times, time() - time_start)
+
         end
-        total_iters += algorithm.τ
+        #total_iters += algorithm.τ
 
         # TODO: Estimate loss from fixed set of samples, make necessary adjustments
         F_hat = GCPLosses.objective(SymCPD(λ, U, S), X, loss, γ)  # Currently using entire tensor
-        push!(epoch_losses, GCPLosses.objective(SymCPD(λ, U, S), X, loss, 0))  # Keep track of losses without regularization term
-        push!(epoch_reg_term_losses, γ * sum(sum((norm(U[k][:, r])^2 - 1)^2 for r in 1:size(U[1])[2]) for k in 1:maximum(S)))
-        #println("Epoch ", epochs, " objective function proportional decrease: ", 1 - F_hat / F_hat_old, "      ", F_hat)
+        
         if F_hat / F_hat_old > algorithm.κ_factor
             U = deepcopy(U_old)
             λ = deepcopy(λ_old)
@@ -196,8 +196,7 @@ function _symgcp(
             lr *= algorithm.ν
             c += 1
         end
-        epochs += 1
-        push!(epoch_times, time() - time_start)
+        
     end
 
     # Return final model and loss after each epoch

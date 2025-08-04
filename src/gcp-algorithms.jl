@@ -12,6 +12,7 @@ using ..TensorKernels: checksym
 using IntervalSets: Interval
 using LinearAlgebra: lu!, mul!, norm, rdiv!
 using LBFGSB: lbfgsb
+using StatsBase: sample!
 
 """
     AbstractAlgorithm
