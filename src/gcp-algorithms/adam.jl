@@ -200,6 +200,6 @@ function _symgcp(
     end
 
     # Return final model and loss after each epoch
-    return SymCPD(λ, U, S), epoch_losses, epoch_reg_term_losses, epoch_times
+    return SymCPD(λ, U, S), iter_losses, iter_reg_term_losses, iter_times
 
 end
