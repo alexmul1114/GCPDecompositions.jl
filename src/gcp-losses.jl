@@ -6,12 +6,11 @@ Loss functions for Generalized CP Decomposition.
 module GCPLosses
 
 using ..GCPDecompositions
-using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, checksym, khatrirao, sparse_mttkrp!
+using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, checksym, khatrirao
 using IntervalSets: Interval
 using LinearAlgebra: mul!, rmul!, Diagonal, norm
-using SparseArrays: spzeros, sparse
+using SparseTensors: SparseTensorCOO, storedindices, storedvalues
 using StatsBase: countmap
-#using SparseArrayKit
 import ForwardDiff
 
 # Abstract type
@@ -191,32 +190,23 @@ function stochastic_grad_U_λ!(
         end
     end
 
-    row_indices = Vector{Vector{Int}}(undef, N)
-    for mode in 1:N
-        row_indices[mode] = [idx[mode] for idx in keys(idx_counts)]
-    end
-    Y_hat_col_indices = collect(1:length(keys(idx_counts)))
-
-    # Form exploded factor matrices
-    U_exp = tuple([M.U[σ_n][row_indices[n], :] for (n, σ_n) in enumerate(M.S)]...)
+    # Create sparse subsampled derivative tensor
+    Y = SparseTensorCOO(size(X), [Tuple(I) for I in keys(idx_counts)], sample_vals)
 
     # Factor matrix gradients
+    Us = tuple([M.U[k] for k in M.S]...)
     for j in 1:K
         if sym_data
-            # Form Y_hat
             first_n = findall(M.S .== j)[1]
-            Y_hat = sparse(row_indices[first_n], Y_hat_col_indices, sample_vals, size(GU_λ[j])[1], length(keys(idx_counts)))
-            sparse_mttkrp!(GU_λ[j], Y_hat, U_exp, first_n)
+            mttkrp!(GU_λ[j], Y, Us, first_n)
             rmul!(GU_λ[j], count(M.S .== j))
         else
             for (index, mode) in enumerate(findall(M.S .== j))
-                # Form Y_hat
-                Y_hat = sparse(row_indices[mode], Y_hat_col_indices, sample_vals, size(GU_λ[j])[1], length(keys(idx_counts)))
                 if index == 1  # Overwrite
-                    sparse_mttkrp!(GU_λ[j], Y_hat, U_exp, mode)
+                    mttkrp!(GU_λ[j], Y, Us, mode)
                 else  # Add in-place
                     added_factor = similar(GU_λ[j])
-                    sparse_mttkrp!(added_factor, Y_hat, U_exp, mode)
+                    mttkrp!(added_factor, Y, Us, mode)
                     GU_λ[j] .+= added_factor
                 end
             end
@@ -230,7 +220,9 @@ function stochastic_grad_U_λ!(
     end
 
     # Weights gradient
-    GU_λ[K+1] .= vec(sample_vals' * reduce(.*, U_exp))
+	inds, vals = storedindices(Y), storedvalues(Y)
+	Uh = reduce(.*, Us[k][getindex.(inds, k), :] for k in 1:length(Us))
+    mul!(GU_λ[K+1], Uh', vals)
 
     return GU_λ
 end
