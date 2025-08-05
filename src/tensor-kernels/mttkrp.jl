@@ -105,7 +105,7 @@ function mttkrp!(
 end
 
 """
-    mttkrp!(G, X, (U1, U2, ..., UN), n, buffer=create_mttkrp_buffer(X, U, n))
+    sparse_mttkrp!(G, X, (U1, U2, ..., UN), n,
 
 Compute the sparse Matricized Tensor Times Khatri-Rao Product (MTTKRP)
 of a sparse N-way tensor X with the matrices U1, U2, ..., UN along mode n
@@ -113,12 +113,12 @@ and store the result in G.
 
 See also: `mttkrp`
 """
-function mttkrp!(
+function sparse_mttkrp!(
     G::TM,
-    X::AbstractSparseTensor{T,N},
+    X::AbstractSparseTensor{Tv,Ti,N},
     U::NTuple{N,TU},
     n::Integer,
-) where {TM<:AbstractMatrix,T,N,TU<:AbstractMatrix}
+) where {TM<:AbstractMatrix,Tv,Ti,N,TU<:AbstractMatrix}
     I, r = _checked_mttkrp_dims(X, U, n)
 
     # Check output dimensions

@@ -7,9 +7,9 @@ module TensorKernels
 
 using Compat: allequal
 using LinearAlgebra: mul!
-using SparseArrays: AbstractSparseMatrix
+using SparseArrays: AbstractSparseMatrix, sparse
 using SparseTensors: AbstractSparseTensor, numstored, storedindices, storedvalues
-export create_mttkrp_buffer, mttkrp, mttkrp!, mttkrps, mttkrps!, khatrirao, khatrirao!, checksym
+export create_mttkrp_buffer, mttkrp, mttkrp!, mttkrps, mttkrps!, khatrirao, khatrirao!, checksym, sparse_mttkrp!
 
 include("tensor-kernels/khatrirao.jl")
 include("tensor-kernels/mttkrp.jl")

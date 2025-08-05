@@ -6,7 +6,7 @@ Loss functions for Generalized CP Decomposition.
 module GCPLosses
 
 using ..GCPDecompositions
-using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, checksym, khatrirao
+using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, sparse_mttkrp!, checksym, khatrirao
 using IntervalSets: Interval
 using LinearAlgebra: mul!, rmul!, Diagonal, norm
 using SparseTensors: SparseTensorCOO, storedindices, storedvalues
@@ -198,15 +198,15 @@ function stochastic_grad_U_λ!(
     for j in 1:K
         if sym_data
             first_n = findall(M.S .== j)[1]
-            mttkrp!(GU_λ[j], Y, Us, first_n)
+            sparse_mttkrp!(GU_λ[j], Y, Us, first_n)
             rmul!(GU_λ[j], count(M.S .== j))
         else
             for (index, mode) in enumerate(findall(M.S .== j))
                 if index == 1  # Overwrite
-                    mttkrp!(GU_λ[j], Y, Us, mode)
+                    sparse_mttkrp!(GU_λ[j], Y, Us, mode)
                 else  # Add in-place
                     added_factor = similar(GU_λ[j])
-                    mttkrp!(added_factor, Y, Us, mode)
+                    sparse_mttkrp!(added_factor, Y, Us, mode)
                     GU_λ[j] .+= added_factor
                 end
             end
