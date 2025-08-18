@@ -6,7 +6,7 @@ Loss functions for Generalized CP Decomposition.
 module GCPLosses
 
 using ..GCPDecompositions
-using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, sparse_mttkrp!, checksym, khatrirao
+using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, sparse_mttkrp!, sparse_mttkrps!, checksym, khatrirao
 using IntervalSets: Interval
 using LinearAlgebra: mul!, rmul!, Diagonal, norm
 using SparseTensors: SparseTensorCOO, storedindices, storedvalues
@@ -136,8 +136,7 @@ function grad_U_λ!(
             end
         end
         rmul!(GU_λ[j], Diagonal(M.λ))
-        norm_reg_factor = mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[j]; dims=1)
-        GU_λ[j] .= GU_λ[j] + norm_reg_factor
+        GU_λ[j] .+= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[j]; dims=1)
     end
 
     # Weights gradient
@@ -195,28 +194,29 @@ function stochastic_grad_U_λ!(
 
     # Factor matrix gradients
     Us = tuple([M.U[k] for k in M.S]...)
+
+    # Compute mttkrp for each mode
+    mode_GUs = similar.(Us)
+    sparse_mttkrps!(mode_GUs, Y, Us)
+
     for j in 1:K
         if sym_data
             first_n = findall(M.S .== j)[1]
-            sparse_mttkrp!(GU_λ[j], Y, Us, first_n)
+            GU_λ[j] .= mode_GUs[first_n]
             rmul!(GU_λ[j], count(M.S .== j))
         else
             for (index, mode) in enumerate(findall(M.S .== j))
                 if index == 1  # Overwrite
-                    sparse_mttkrp!(GU_λ[j], Y, Us, mode)
+                    GU_λ[j] .= mode_GUs[mode]
                 else  # Add in-place
-                    added_factor = similar(GU_λ[j])
-                    sparse_mttkrp!(added_factor, Y, Us, mode)
-                    GU_λ[j] .+= added_factor
+                    GU_λ[j] .+= mode_GUs[mode]
                 end
             end
         end
         rmul!(GU_λ[j], Diagonal(M.λ))
-        norm_reg_factor = zeros(size(GU_λ[j]))
-        for r in 1:ncomps(M)
-            norm_reg_factor[:, r] = 4γ * (norm(M.U[j][:, r])^2 - 1) * M.U[j][:, r]
+        if !iszero(γ)
+            GU_λ[j] .+= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[j]; dims=1)
         end
-        GU_λ[j] .= GU_λ[j] + norm_reg_factor
     end
 
     # Weights gradient
