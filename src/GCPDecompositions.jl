@@ -58,9 +58,10 @@ gcp(
     r;
     loss = GCPLosses.LeastSquares(),
     constraints = default_constraints(loss),
+    regularizer = GCPLosses.NullRegularizer(),
     algorithm = default_algorithm(X, r, loss, constraints),
     init = default_init(X, r, loss, constraints, algorithm),
-) = GCPAlgorithms._gcp(X, r, loss, constraints, algorithm, init)
+) = GCPAlgorithms._gcp(X, r, loss, constraints, regularizer, algorithm, init)
 
 # Defaults
 

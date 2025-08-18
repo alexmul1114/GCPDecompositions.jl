@@ -8,7 +8,7 @@ module GCPLosses
 using ..GCPDecompositions
 using ..TensorKernels: mttkrps!
 using IntervalSets: Interval
-using LinearAlgebra: mul!, rmul!, Diagonal
+using LinearAlgebra: mul!, rmul!, Diagonal, norm
 import ForwardDiff
 
 # Abstract type
@@ -99,20 +99,20 @@ function grad_U! end
 # Objective function and gradients
 
 """
-    objective(M::CPD, X::AbstractArray, loss)
+    objective(M::CPD, X::AbstractArray, loss, regularizer)
 
 Compute the GCP objective function for the model tensor `M`, data tensor `X`,
-and loss function `loss`.
+loss function `loss`, and regularizer `regularizer``.
 """
-function objective(M::CPD{T,N}, X::Array{TX,N}, loss) where {T,TX,N}
-    return sum(value(loss, X[I], M[I]) for I in CartesianIndices(X) if !ismissing(X[I]))
+function objective(M::CPD{T,N}, X::Array{TX,N}, loss, regularizer) where {T,TX,N}
+    return sum(value(loss, X[I], M[I]) for I in CartesianIndices(X) if !ismissing(X[I])) + value(regularizer, M.U)
 end
 
 """
-    grad_U!(GU, M::CPD, X::AbstractArray, loss)
+    grad_U!(GU, M::CPD, X::AbstractArray, loss, regularizer)
 
 Compute the GCP gradient with respect to the factor matrices `U = (U[1],...,U[N])`
-for the model tensor `M`, data tensor `X`, and loss function `loss`, and store
+for the model tensor `M`, data tensor `X`, loss function `loss`, and regularizer `regularizer`, and store
 the result in `GU = (GU[1],...,GU[N])`.
 """
 function grad_U!(
@@ -120,6 +120,7 @@ function grad_U!(
     M::CPD{T,N},
     X::Array{TX,N},
     loss,
+    regularizer,
 ) where {T,TX,N,TGU<:AbstractMatrix{T}}
     Y = [
         ismissing(X[I]) ? zero(nonmissingtype(eltype(X))) : deriv(loss, X[I], M[I]) for
@@ -128,6 +129,11 @@ function grad_U!(
     mttkrps!(GU, Y, M.U)
     for k in 1:N
         rmul!(GU[k], Diagonal(M.λ))
+    end
+    reg_factors = map(similar, GU)
+    grad_U!(reg_factors, regularizer, M.U)
+    for i in eachindex(GU)
+        GU[i] .+= reg_factors[i]
     end
     return GU
 end
@@ -420,7 +426,22 @@ value(loss::UserDefined, x, m) = loss.func(x, m)
 deriv(loss::UserDefined, x, m) = loss.deriv(x, m)
 domain(loss::UserDefined) = loss.domain
 
+# No regularization
+"""
+    NullRegularizer
+
+Type for no regularization
+
+"""
+struct NullRegularizer{} <: AbstractRegularizer end
+value(reg::NullRegularizer, U::NTuple) = zero(eltype(U[1]))
+function grad_U!(GU::NTuple{N,TGU}, reg::NullRegularizer, U::NTuple{N,TU}) where {T,N,TGU<:AbstractMatrix{T},TU<:AbstractMatrix{T}}
+    for n in eachindex(U)
+        GU[n] .= zeros(eltype(U[n]), size(U[n]))
+    end
+    return GU
 end
+
 
 # Column-norm regularization
 """
@@ -438,35 +459,16 @@ struct ColumnNormRegularizer{S<:Real, T<:Real} <: AbstractRegularizer
             throw(DomainError(γ, "ColumnNormRegularizer requires nonnegative `γ`"))
         α >= zero(α) || 
             throw(DomainError(α, "ColumnNormRegularizer requires nonnegative `α`"))
-        return new(λ, α)
+        return new(γ, α)
     end 
 end
 ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
 value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(U[n][:, r])^2 - reg.α)^2 for r in 1:size(U[1])[2]) for n in eachindex(U))
-function grad_U!(GU::NTuple{N,TU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TU<:AbstractMatrix{T}}
+function grad_U!(GU::NTuple{N,TGU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TGU<:AbstractMatrix{T},TU<:AbstractMatrix{T}}
     for n in eachindex(U)
-        GU[n] .= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, U[j]; dims=1)
+        GU[n] .= mapslices(x -> 4*reg.γ * (norm(x)^2 - reg.α) * x, U[n]; dims=1)
     end
     return GU
 end
 
-
-# Entrywise loss with regularization
-"""
-    RegularizedEntrywiseLoss
-
-Type for regularizing norms of columns of factor matrices for
-deviating from constant α, with penalty term γ
-
-"""
-struct RegularizedEntrywiseLoss{S<:AbstractEntrywiseLoss, T<:AbstractRegularizer} <: AbstractLoss
-    entrywise_loss::S
-    reg::T
-end
-function value(loss::RegularizedEntrywiseLoss, X, M)
-    return sum(I -> value(loss.entrywise_loss, X[I], M[I]), CartesianIndices(X)) + value(loss.reg, M.U)
-end
-function grad_M(loss::RegularizedEntrywiseLoss, X, M)
-    GU = ntuple(i -> similar(U[i]), length(U))
-    return grad_U!(GU, M, X, loss.entrywise_loss) + grad_U!(GU, loss.reg, M.U)
 end
