@@ -368,14 +368,19 @@ end
     using Random, IntervalSets
     using Distributions
 
-    @testset "size(X)=$sz, rank(X)=$r, β" for sz in [(15, 20, 25), (50, 40, 30)],
+    @testset "size(X)=$sz, rank(X)=$r, β=$β" for sz in [(15, 20, 25), (50, 40, 30)],
         r in 1:2,
         β in [0, 0.5, 1]
 
         Random.seed!(0)
         M = CPD(ones(r), rand.(sz, r))
-        # May want to consider other distributions depending on value of β
-        X = [rand(Poisson(M[I])) for I in CartesianIndices(size(M))]
+        if β == 0
+            # For β=0 (Itakura-Saito), use Exponential distribution for better convergence
+            X = [rand(Exponential(M[I])) for I in CartesianIndices(size(M))]
+        else
+            # For other β values, use Poisson distribution
+            X = [rand(Poisson(M[I])) for I in CartesianIndices(size(M))]
+        end
 
         function beta_value(β, x, m)
             if β == 0
@@ -480,4 +485,21 @@ end
             @test maximum(I -> abs(Mh[I] - Mr[I]), CartesianIndices(X)) <= 1e-5
         end
     end
+end
+
+@testitem "Regularizers" begin
+    using Random
+
+    @testset "NullRegularizer" begin
+        # Check that loss using NullRegularzier is same as loss from just loss function
+        # Check types?
+    end
+
+    @testset "ColumnNormRegularizer" begin
+        # Check that constructor throws errors for invalid parameters
+        # Check that output value is same as loss function value + manually computed regularization term
+        # Check that gradient value is same as loss function grad + manually computed regularization grad term
+        # Check types?
+    end
+
 end
