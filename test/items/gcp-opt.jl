@@ -489,17 +489,68 @@ end
 
 @testitem "Regularizers" begin
     using Random
+    using LinearAlgebra: norm
 
     @testset "NullRegularizer" begin
-        # Check that loss using NullRegularzier is same as loss from just loss function
-        # Check types?
+        Random.seed!(0)
+        sz = (5, 10, 15)
+        r = 3
+
+        M = CPD(ones(r), rand.(sz, r))
+        X = randn(sz)
+
+        loss_func = GCPLosses.LeastSquares()
+        reg = GCPLosses.NullRegularizer()
+
+        @test typeof(GCPLosses.value(reg, M.U)) <: eltype(M.U[1])
+
+        GU = similar.(M.U)
+        GCPLosses.grad_U!(GU, reg, M.U)
+        for n in 1:3
+            @test typeof(GU[n]) <: typeof(M.U[n])
+            @test size(GU[n]) == size(M.U[n])
+            @test iszero(GU[n])
+        end
+
+        ref_val = sum(GCPLosses.value(loss_func, X[I], M[I]) for I in CartesianIndices(X))
+        computed_val = GCPLosses.objective(M, X, loss_func, reg)
+        @test abs(ref_val - computed_val) <= 1e-8
     end
 
     @testset "ColumnNormRegularizer" begin
-        # Check that constructor throws errors for invalid parameters
-        # Check that output value is same as loss function value + manually computed regularization term
         # Check that gradient value is same as loss function grad + manually computed regularization grad term
         # Check types?
-    end
+        Random.seed!(0)
+        sz = (5, 10, 15)
+        r = 3
+        γ = 0.1
+        α = 1.0
 
+        M = CPD(ones(r), rand.(sz, r))
+        X = randn(sz)
+
+        loss_func = GCPLosses.LeastSquares()
+        reg = GCPLosses.ColumnNormRegularizer(γ, α)
+
+        @test_throws DomainError GCPLosses.ColumnNormRegularizer(-1)
+        @test_throws DomainError GCPLosses.ColumnNormRegularizer(γ, -1)
+
+        ref_val =
+            sum(GCPLosses.value(loss_func, X[I], M[I]) for I in CartesianIndices(X)) +
+            γ * sum(
+                sum((norm(M.U[n][:, r])^2 - α)^2 for r in 1:size(M.U[1])[2]) for
+                n in eachindex(M.U)
+            )
+        computed_val = GCPLosses.objective(M, X, loss_func, reg)
+        @test abs(ref_val - computed_val) <= 1e-8
+
+        GU = similar.(M.U)
+        GCPLosses.grad_U!(GU, reg, M.U)
+        for n in 1:3
+            @test typeof(GU[n]) <: typeof(M.U[n])
+            @test size(GU[n]) == size(M.U[n])
+            @test maximum(abs.(GU[n] .- mapslices(x -> 4γ * (norm(x)^2 - α) * x, M.U[n]; dims=1))) <= 1e-8
+        end
+
+    end
 end

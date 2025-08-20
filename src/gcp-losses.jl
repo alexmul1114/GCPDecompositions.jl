@@ -462,6 +462,7 @@ struct ColumnNormRegularizer{S<:Real, T<:Real} <: AbstractRegularizer
         return new(γ, α)
     end 
 end
+ColumnNormRegularizer(γ::S = 0.1, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
 ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
 value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(U[n][:, r])^2 - reg.α)^2 for r in 1:size(U[1])[2]) for n in eachindex(U))
 function grad_U!(GU::NTuple{N,TGU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TGU<:AbstractMatrix{T},TU<:AbstractMatrix{T}}
