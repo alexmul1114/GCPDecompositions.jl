@@ -117,7 +117,7 @@ end
     @test checksym(X, (1, 2, 1, 1)) == false
 end
 
- @testitem "sparse_mttkrp" setup=[SparseTensorsSetup] begin
+ @testitem "sparse_mttkrp" begin
     using Random
     using GCPDecompositions.TensorKernels
     import Pkg
