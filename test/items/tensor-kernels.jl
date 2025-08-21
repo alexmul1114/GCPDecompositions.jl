@@ -120,6 +120,8 @@ end
  @testitem "sparse_mttkrp" setup=[SparseTensorsSetup] begin
     using Random
     using GCPDecompositions.TensorKernels
+    import Pkg
+    Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")
     using SparseTensors
 
     # Check that sparse mttkrp gives same result as dense
