@@ -15,6 +15,15 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SparseTensors = "38ef35ee-5ab3-45b3-983e-85b37ba52cf3"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
+[weakdeps]
+LossFunctions = "30fc2ffe-d236-52d8-8643-a9d8f7c094a7"
+
+[sources]
+SparseTensors = {url = "https://github.com/dahong67/SparseTensors.jl.git"}
+
+[extensions]
+LossFunctionsExt = "LossFunctions"
+
 [compat]
 Compat = "3.42, 4"
 ForwardDiff = "0.10.36, 1"
@@ -28,8 +37,15 @@ SparseTensors = "0.1.0"
 StatsBase = "0.34"
 julia = "1.6"
 
-[extensions]
-LossFunctionsExt = "LossFunctions"
-
-[weakdeps]
+[extras]
+Combinatorics = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 LossFunctions = "30fc2ffe-d236-52d8-8643-a9d8f7c094a7"
+OffsetArrays = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
+
+[targets]
+test = ["Combinatorics", "Distributions", "ForwardDiff", "InteractiveUtils", "LossFunctions", "OffsetArrays", "Test", "TestItemRunner"]
