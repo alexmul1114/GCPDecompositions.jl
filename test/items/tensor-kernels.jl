@@ -121,7 +121,8 @@ end
     using Random
     using GCPDecompositions.TensorKernels
     # TestItemRunner has issues with unregistered packages in environment, so adding SparseTensors here
-    import Pkg; Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")
+    using Pkg
+    Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")
     using SparseTensors
 
     # Check that sparse mttkrp gives same result as dense
