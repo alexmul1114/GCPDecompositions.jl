@@ -1,3 +1,8 @@
+@testsnippet SparseTensorsSetup begin
+    import Pkg
+    Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")
+end
+
 ## Tensor Kernels
 
 @testitem "mttkrp" begin
@@ -117,12 +122,9 @@ end
     @test checksym(X, (1, 2, 1, 1)) == false
 end
 
- @testitem "sparse_mttkrp" begin
+ @testitem "sparse_mttkrp" setup=[SparseTensorsSetup] begin
     using Random
     using GCPDecompositions.TensorKernels
-    # TestItemRunner has issues with unregistered packages in environment, so adding SparseTensors here
-    using Pkg
-    Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")
     using SparseTensors
 
     # Check that sparse mttkrp gives same result as dense
