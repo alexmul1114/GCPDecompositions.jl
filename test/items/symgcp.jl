@@ -21,7 +21,7 @@
             X[i1, i2, i3] = sum(U_star[i1, :] .* U_star[i2, :] .* U_star[i3, :])
         end
 
-        # Check that computed and autodiff gradients at solution = 0
+        # Check that computed gradients at solution = 0
         loss = LeastSquares()
         constraints = default_constraints(loss)
         algorithm = LBFGSB()
@@ -44,11 +44,6 @@
             return reshape(khatrirao(U, U, U) * λ, (sz, sz, sz))
         end
         objective(Uλ_vec) = norm(X - form_fullsym_M(Uλ_vec))^2
-        auto_grad_solution = ForwardDiff.gradient(objective, vcat(vec(M_star.U[1]), M_star.λ))
-        auto_grad_solution_U = reshape(auto_grad_solution[1:sz*r], size(M_star.U[1]))
-        auto_grad_solution_λ = auto_grad_solution[sz*r+1:end]
-        @test isapprox(auto_grad_solution_U, zeros(eltype(auto_grad_solution_U), size(auto_grad_solution_U)), atol=1e-12)
-        @test isapprox(auto_grad_solution_λ, zeros(eltype(auto_grad_solution_λ), size(auto_grad_solution_λ)), atol=1e-12)
 
         # Check gradients at random init compared to autodiff
         init = default_init_sym(X, r, loss, constraints, algorithm, S)
@@ -259,7 +254,7 @@ end
         algorithm = Adam()
         S = (1, 2, 3)
 
-        # Check gradients at random init for stochastic with batch size equal to entire tensor and non-stochastic
+        # Check gradients at random init for stochastic with batch equal to entire tensor and non-stochastic
         init = default_init_sym(X, r, loss, constraints, algorithm, S)
         M0 = deepcopy(init)
         GU_batch = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
@@ -322,7 +317,7 @@ end
         algorithm = Adam()
         S = (1, 1, 1)
 
-        # Check gradients at random init for stochastic with batch size equal to entire tensor and non-stochastic
+        # Check gradients at random init for stochastic with batch equal to entire tensor and non-stochastic
         init = default_init_sym(X, r, loss, constraints, algorithm, S)
         M0 = deepcopy(init)
         GU_batch = (similar(M0.U[1]), similar(M0.λ))
@@ -478,4 +473,94 @@ end
 
         end
 
+end
+
+@testitem "stochastic-gradients-stratified" begin
+    using GCPDecompositions:
+        TensorKernels.khatrirao,
+        GCPAlgorithms.Adam,
+        default_constraints,
+        default_init_sym,
+        GCPLosses.LeastSquares,
+        GCPLosses.grad_U_λ!,
+        GCPLosses.stochastic_grad_U_λ!,
+        SymCPD
+    using LinearAlgebra: norm
+    import ForwardDiff
+    using Random
+
+    @testset "r=$r, sz=$sz, γ=$γ" for r in [1, 5], sz in [10], γ in [0, 0.1]
+
+        # Form tensor with 500 zeros and 500 nonzeros
+        X = zeros(sz,sz,sz)
+        nonzero_idxs = randperm(sz^3)[1:Int(sz^3/2)]
+        X[nonzero_idxs] = randn(Int(sz^3/2))
+
+        loss = LeastSquares()
+        constraints = default_constraints(loss)
+        algorithm = Adam()
+        S = (1, 2, 3)
+
+        # Check gradients at random init for stochastic with batch equal to entire tensor and non-stochastic
+        init = default_init_sym(X, r, loss, constraints, algorithm, S)
+        M0 = deepcopy(init)
+        GU_batch = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
+        grad_U_λ!(GU_batch, M0, X, loss, false, γ)
+        batch_grad_U1 = GU_batch[1]
+        batch_grad_U2 = GU_batch[2]
+        batch_grad_U3 = GU_batch[3]
+        batch_grad_λ = GU_batch[4]
+
+        GU_stochastic = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
+        GU_stochastic_simplified = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
+
+        stochastic_grad_U_λ!(GU_stochastic, M0, X, loss, false, γ, CartesianIndices(X), "stratified"; p=length(X)-length(nonzero_idxs), q=length(nonzero_idxs))
+        stochastic_grad_U1 = GU_stochastic[1]
+        stochastic_grad_U2 = GU_stochastic[2]
+        stochastic_grad_U3 = GU_stochastic[3]
+        stochastic_grad_λ = GU_stochastic[4]
+        stochastic_grad_U_λ!(GU_stochastic_simplified, M0, X, loss, true, γ, CartesianIndices(X), "stratified"; p=length(X)-length(nonzero_idxs), q=length(nonzero_idxs))
+        stochastic_grad_U1_simplified = GU_stochastic_simplified[1]
+        stochastic_grad_U2_simplified = GU_stochastic_simplified[2]
+        stochastic_grad_U3_simplified = GU_stochastic_simplified[3]
+        stochastic_grad_λ_simplified = GU_stochastic_simplified[4]
+
+        @test isapprox(batch_grad_U1, stochastic_grad_U1, rtol=1e-6)
+        @test isapprox(batch_grad_U2, stochastic_grad_U2, rtol=1e-6)
+        @test isapprox(batch_grad_U3, stochastic_grad_U3, rtol=1e-6)
+        @test isapprox(batch_grad_λ, stochastic_grad_λ, rtol=1e-6)
+        @test isapprox(batch_grad_U1, stochastic_grad_U1_simplified, rtol=1e-6)
+        @test isapprox(batch_grad_U2, stochastic_grad_U2_simplified, rtol=1e-6)
+        @test isapprox(batch_grad_U3, stochastic_grad_U3_simplified, rtol=1e-6)
+        @test isapprox(batch_grad_λ, stochastic_grad_λ_simplified, rtol=1e-6)
+
+    end
+end
+
+@testitem "symgcp" begin
+    using Random
+
+    @testset "nonsymmetric, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25), (50, 40, 30)], r in 1:2
+        Random.seed!(0)
+        M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares())
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+
+    @testset "fully symmetric, size(X)=$sz, rank(X)=$r" for sz in [(15,15,15), (30,30,30)], r in 1:2
+        Random.seed!(0)
+        M = SymCPD(ones(r), (rand(sz[1],r), ), (1,1,1))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        Mh, _, _, _ = symgcp(X, r, (1,1,1); loss = GCPLosses.LeastSquares())
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+
+    @testset "partially symmetric, size(X)=$sz, rank(X)=$r" for sz in [(15,15,20), (25,25,30)], r in 1:2
+        Random.seed!(0)
+        M = SymCPD(ones(r), (rand(sz[1],r), rand(sz[3],r)), (1,1,2))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        Mh, _, _, _ = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares())
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
 end

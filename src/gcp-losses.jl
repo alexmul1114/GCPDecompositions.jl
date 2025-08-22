@@ -153,7 +153,6 @@ Compute the SymGCP gradient with respect to the factor matrices `U = (U[1],...,U
 weights `λ` for the model tensor `M`, elements of the data tensor `X` with indices given by B, and loss function `loss`, and store
 the result in `GU_λ = (GU[1],...,GU[K], Gλ)`. Simplify gradients for symmetry of model tensor matching 
 symmetry of data tensor if sym_data is true. γ controls the strength of the (column-norm - 1) regularization.
-    η : number of nonzeros in `X`
 """
 function stochastic_grad_U_λ!(
     GU_λ::Tuple,
@@ -164,11 +163,11 @@ function stochastic_grad_U_λ!(
     γ,
     B,
     sampling_strategy;
-    η=0,
     p=1,
     q=1
 ) where {T,TX,N,K}
     
+    η = count(iszero, X)
     ζ = length(X) - η
     idx_counts = countmap(B)
     sample_vals = zeros(T, length(keys(idx_counts)))   # Will contain entries of elementwise derivative tensor at indices given by B
@@ -177,10 +176,11 @@ function stochastic_grad_U_λ!(
         if sampling_strategy == "uniform"
             sample_vals[i] = num_sampled * (length(X) / length(B)) .* deriv(loss, X[element_idx], M[element_idx])  # Compute elementwise derivative
         elseif sampling_strategy == "stratified"
-            if i <= p
-                sample_vals[i] = num_sampled * (η / p) .* deriv(loss, X[element_idx], M[element_idx])  # Nonzero entries
+            entry = X[element_idx]
+            if iszero(entry)
+                sample_vals[i] = num_sampled * (ζ / q) .* deriv(loss, entry, M[element_idx])
             else
-                sample_vals[i] = num_sampled * (ζ / q) .* deriv(loss, 0.0, M[element_idx])             # Zero entries
+                sample_vals[i] = num_sampled * (η / p) .* deriv(loss, X[element_idx], M[element_idx])
             end
         else
             error(
