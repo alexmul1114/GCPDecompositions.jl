@@ -147,7 +147,7 @@ function _symgcp(
 
             # Compute stochastic gradient
             if algorithm.sampling_strategy == "stratified"
-                GCPLosses.stochastic_grad_U_λ!((GU..., Gλ), SymCPD(λ, U, S), X, loss, sym_data, γ, B, "stratified"; η=length(nonzero_idxs), p=p, q=q)
+                GCPLosses.stochastic_grad_U_λ!((GU..., Gλ), SymCPD(λ, U, S), X, loss, sym_data, γ, B, "stratified"; p=p, q=q)
             else
                 GCPLosses.stochastic_grad_U_λ!((GU..., Gλ), SymCPD(λ, U, S), X, loss, sym_data, γ, B, "uniform")
             end

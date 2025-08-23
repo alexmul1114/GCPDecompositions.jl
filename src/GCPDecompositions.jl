@@ -123,8 +123,7 @@ for symgcp.
 
 See also: `symgcp`.
 """
-default_algorithm_sym(X::Array{<:Real}, r, loss::GCPLosses.LeastSquares, constraints::Tuple{}) =
-    GCPAlgorithms.LBFGSB()
+default_algorithm_sym(X, r, loss, constraints) = GCPAlgorithms.LBFGSB()
 
 """
     default_init([rng=default_rng()], X, r, loss, constraints, algorithm)
