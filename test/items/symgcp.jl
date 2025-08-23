@@ -489,17 +489,18 @@ end
     import ForwardDiff
     using Random
 
-    @testset "r=$r, sz=$sz, γ=$γ" for r in [1, 5], sz in [10], γ in [0, 0.1]
+    @testset "r=$r, sz=10, γ=$γ" for r in [1, 5], γ in [0, 0.1]
 
-        # Form tensor with 500 zeros and 500 nonzeros
+        sz = 10
+        # Form tensor with 100 zeros and 900 nonzeros
         X = zeros(sz,sz,sz)
-        nonzero_idxs = randperm(sz^3)[1:Int(sz^3/2)]
-        X[nonzero_idxs] = randn(Int(sz^3/2))
+        nonzero_idxs = randperm(sz^3)[1:Int(sz^3/10)]
+        X[nonzero_idxs] = randn(Int(sz^3/10))
 
         loss = LeastSquares()
         constraints = default_constraints(loss)
         algorithm = Adam()
-        S = (1, 2, 3)
+        S = (1,2,3)
 
         # Check gradients at random init for stochastic with batch equal to entire tensor and non-stochastic
         init = default_init_sym(X, r, loss, constraints, algorithm, S)
@@ -514,12 +515,12 @@ end
         GU_stochastic = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
         GU_stochastic_simplified = (ntuple(i -> similar(M0.U[i]), length(M0.U))..., similar(M0.λ))
 
-        stochastic_grad_U_λ!(GU_stochastic, M0, X, loss, false, γ, CartesianIndices(X), "stratified"; p=length(X)-length(nonzero_idxs), q=length(nonzero_idxs))
+        stochastic_grad_U_λ!(GU_stochastic, M0, X, loss, false, γ, CartesianIndices(X), "stratified"; p=length(nonzero_idxs), q=length(X)-length(nonzero_idxs))
         stochastic_grad_U1 = GU_stochastic[1]
         stochastic_grad_U2 = GU_stochastic[2]
         stochastic_grad_U3 = GU_stochastic[3]
         stochastic_grad_λ = GU_stochastic[4]
-        stochastic_grad_U_λ!(GU_stochastic_simplified, M0, X, loss, true, γ, CartesianIndices(X), "stratified"; p=length(X)-length(nonzero_idxs), q=length(nonzero_idxs))
+        stochastic_grad_U_λ!(GU_stochastic_simplified, M0, X, loss, true, γ, CartesianIndices(X), "stratified"; p=length(nonzero_idxs), q=length(X)-length(nonzero_idxs))
         stochastic_grad_U1_simplified = GU_stochastic_simplified[1]
         stochastic_grad_U2_simplified = GU_stochastic_simplified[2]
         stochastic_grad_U3_simplified = GU_stochastic_simplified[3]
@@ -537,8 +538,9 @@ end
     end
 end
 
-@testitem "symgcp" begin
-    using Random
+@testitem "symgcp-lbfgs" begin
+    using Random, IntervalSets
+    using Distributions
 
     @testset "nonsymmetric, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25), (50, 40, 30)], r in 1:2
         Random.seed!(0)
@@ -546,6 +548,15 @@ end
         X = [M[I] for I in CartesianIndices(size(M))]
         Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares())
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+
+    @testset "unsupported constraints" begin
+        @test_throws ErrorException symgcp(
+            randn(5,5,5),
+            2,
+            (1,2,3);
+            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(1, Inf)),
+        )
     end
 
     @testset "fully symmetric, size(X)=$sz, rank(X)=$r" for sz in [(15,15,15), (30,30,30)], r in 1:2
@@ -561,6 +572,27 @@ end
         M = SymCPD(ones(r), (rand(sz[1],r), rand(sz[3],r)), (1,1,2))
         X = [M[I] for I in CartesianIndices(size(M))]
         Mh, _, _, _ = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares())
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+
+    @testset "nonsymmetric, nonnegative, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25), (50, 40, 30)], r in 1:2
+       Random.seed!(0)
+        M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.NonnegativeLeastSquares())
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+end
+
+@testitem "symgcp-adam" begin
+    using Random
+    using Statistics
+    @testset "nonsymmetric, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25)], r in 1:2
+        Random.seed!(0)
+        M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        # Run Adam with large batch size
+        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), algorithm = GCPAlgorithms.Adam(s=length(X), τ=100))
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
 end
