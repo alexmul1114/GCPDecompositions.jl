@@ -586,7 +586,7 @@ end
 
 @testitem "symgcp-adam" begin
     using Random
-    using Statistics
+
     @testset "nonsymmetric, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25)], r in 1:2
         Random.seed!(0)
         M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
