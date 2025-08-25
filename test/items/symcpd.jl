@@ -332,6 +332,27 @@ end
     end
 end
 
+@testitem "normalizecomps-symmetric" begin
+    using LinearAlgebra
+    
+    @testset "3way,r=$r" for r in [1,3]
+        sz = 10
+        M_orig = SymCPD(ones(r), (rand(sz,r),), (1,1,1))
+        M_copy = deepcopy(M_orig)
+        X = Array(M_orig)
+        normalizecomps!(M_copy)
+        @test maximum(I -> abs(M_orig[I] - M_copy[I]), CartesianIndices(X)) <= 1e-5
+    end 
+    @testset "4way,r=$r" for r in [1,3]
+        sz = 10
+        M_orig = SymCPD(ones(r), (rand(sz,r),), (1,1,1,1))
+        M_copy = deepcopy(M_orig)
+        X = Array(M_orig)
+        normalizecomps!(M_copy)
+        @test maximum(I -> abs(M_orig[I] - M_copy[I]), CartesianIndices(X)) <= 1e-5
+    end 
+end
+
 @testitem "permutecomps" begin
     using Combinatorics
 

@@ -188,18 +188,19 @@ function _normalizecomps!(
         if dims_U[k]
             norms = mapslices(zero_to_one ∘ Base.Fix2(norm, p), M.U[k]; dims = 1)
             M.U[k] ./= norms
-            excess .*= norms
+            excess .*= norms .^ count(==(k), M.S)
         end
     end
 
     # Distribute excess weight (uniformly across specified parts)
-    excess .= excess .^ (1 / count((dist_λ, dist_U...)))
+    total_dist_count = (dist_λ ? 1 : 0) + sum(k -> dist_U[k] ? count(==(k), M.S) : 0, 1:ngroups(M))
+    excess .= excess .^ (1 / total_dist_count)
     if dist_λ
         M.λ .*= dropdims(excess; dims = 1)
     end
     for k in Base.OneTo(ngroups(M))
         if dist_U[k]
-            M.U[k] .*= excess
+            M.U[k] .*= excess .^ (1 / count(==(k), M.S))
         end
     end
 
