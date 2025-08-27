@@ -114,10 +114,10 @@ and store the result in G.
 """
 function sparse_mttkrp!(
     G::TM,
-    X::AbstractSparseTensor{Tv,Ti,N},
+    X::SparseArray{TX,N},
     U::NTuple{N,TU},
     n::Integer,
-) where {TM<:AbstractMatrix,Tv,Ti,N,TU<:AbstractMatrix}
+) where {TM<:AbstractMatrix,TX,N,TU<:AbstractMatrix}
     I, r = _checked_mttkrp_dims(X, U, n)
 
     # Check output dimensions
@@ -125,9 +125,11 @@ function sparse_mttkrp!(
     size(G) == size(U[n]) ||
         throw(DimensionMismatch("Output `G` must have the same size as `U[n]`"))
 
-    In, s = size(X, n), numstored(X)
-	inds, vals = storedindices(X), storedvalues(X)
-	Yh = sparse(getindex.(inds, n), 1:s, vals, In, s)
+    #In, s = size(X, n), numstored(X)
+	#inds, vals = storedindices(X), storedvalues(X)
+    In = size(X, n)
+    inds, vals, s = nonzero_keys(X), nonzero_values(X), nonzero_length(X)
+	Yh = sparse(getindex.(inds, n), 1:s, collect(vals), In, s)
 	Uh = reduce(.*, U[k][getindex.(inds, k), :] for k in 1:length(U) if k != n)
     mul!(G, Yh, Uh)
 

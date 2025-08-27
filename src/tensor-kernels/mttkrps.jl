@@ -50,9 +50,9 @@ and store the result in G.
 """
 function sparse_mttkrps!(
     G::NTuple{N,TM},
-    X::AbstractSparseTensor{Tv,Ti,N},
+    X::SparseArray{TX,N},
     U::NTuple{N,TU},
-) where {TM<:AbstractMatrix,Tv,Ti,N,TU<:AbstractMatrix}
+) where {TM<:AbstractMatrix,TX,N,TU<:AbstractMatrix}
     _checked_mttkrps_dims(X, U)
 
     # Check output dimensions
@@ -62,7 +62,8 @@ function sparse_mttkrps!(
             throw(DimensionMismatch("Output `G[n]` must have the same size as `U[n]`"))
     end
 
-    inds, vals, s = storedindices(X), storedvalues(X), numstored(X)
+    #inds, vals, s = storedindices(X), storedvalues(X), numstored(X)
+    inds, vals, s = nonzero_keys(X), nonzero_values(X), nonzero_length(X)
     r = size(U[1])[2]
     mode_inds = ntuple(k -> getindex.(inds, k), N)
     
@@ -79,7 +80,7 @@ function sparse_mttkrps!(
 
     for n in 1:N
         In = size(X, n)
-        Yh = sparse(mode_inds[n], 1:s, vals, In, s)
+        Yh = sparse(mode_inds[n], 1:s, collect(vals), In, s)
         G[n] .= Yh*Zh[n]
     end
     return G

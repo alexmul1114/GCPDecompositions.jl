@@ -9,7 +9,7 @@ using ..GCPDecompositions
 using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, sparse_mttkrp!, sparse_mttkrps!, checksym, khatrirao
 using IntervalSets: Interval
 using LinearAlgebra: mul!, rmul!, Diagonal, norm
-using SparseTensors: SparseTensorCOO, storedindices, storedvalues
+using SparseArrayKit: SparseArray, nonzero_keys, nonzero_values
 using StatsBase: countmap
 import ForwardDiff
 
@@ -192,7 +192,9 @@ function stochastic_grad_U_λ!(
     end
 
     # Create sparse subsampled derivative tensor
-    Y = SparseTensorCOO(size(X), [Tuple(I) for I in keys(idx_counts)], sample_vals)
+    #Y = SparseTensorCOO(size(X), [Tuple(I) for I in keys(idx_counts)], sample_vals)
+    inds = collect(keys(idx_counts))
+    Y = SparseArray{T,N}(Dict([(inds[i], sample_vals[i]) for i in eachindex(inds)]), size(X))
 
     # Factor matrix gradients
     Us = tuple([M.U[k] for k in M.S]...)
@@ -222,9 +224,10 @@ function stochastic_grad_U_λ!(
     end
 
     # Weights gradient
-	inds, vals = storedindices(Y), storedvalues(Y)
-	Uh = reduce(.*, Us[k][getindex.(inds, k), :] for k in 1:length(Us))
-    mul!(GU_λ[K+1], Uh', vals)
+	#inds, vals = storedindices(Y), storedvalues(Y)
+    inds, vals = nonzero_keys(Y), nonzero_values(Y)
+	Uh = reduce(.*, Us[k][getindex.(inds, k), :] for k in eachindex(Us))
+    mul!(GU_λ[K+1], Uh', collect(vals))
 
     return GU_λ
 end

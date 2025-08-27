@@ -34,9 +34,6 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
-      - name: Add unregistered SparseTensors dependency for Julia 1.6
-        if: matrix.version == '1.6'
-        run: julia --project=. -e 'using Pkg; Pkg.add(url="https://github.com/dahong67/SparseTensors.jl.git")'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
       - uses: julia-actions/julia-processcoverage@v1

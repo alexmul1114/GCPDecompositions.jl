@@ -120,20 +120,41 @@ end
  @testitem "sparse_mttkrp" begin
     using Random
     using GCPDecompositions.TensorKernels
-    using SparseTensors
+    using SparseArrayKit
 
     # Check that sparse mttkrp gives same result as dense
     @testset "size=$sz, rank=$r" for sz in [(10, 20, 30)], r in [5]
         Random.seed!(0)
-        sample_idxs = [(1,1,2), (3,5,1), (7,8,9)]
+        sample_idxs = [CartesianIndex(1,1,2), CartesianIndex(3,5,1), CartesianIndex(7,8,9)]
         sample_vals = [0.5, -4.56, 1056.43243]
-        X = SparseTensorCOO(sz, sample_idxs, sample_vals)
+        #X = SparseTensorCOO(sz, sample_idxs, sample_vals)
+        X = SparseArray{Float64, 3}(Dict([(sample_idxs[i], sample_vals[i]) for i in eachindex(sample_idxs)]), sz)
         U = randn.(sz, r)
         N = 3
         G = similar.(U)
         for n in 1:N
             sparse_mttkrp!(G[n], X, U, n)
         end
+        @test all(mttkrps(X, U) .≈ G)
+    end
+end
+
+@testitem "sparse_mttkrps" begin
+    using Random
+    using GCPDecompositions.TensorKernels
+    using SparseArrayKit
+
+    # Check that sparse mttkrp gives same result as dense
+    @testset "size=$sz, rank=$r" for sz in [(10, 20, 30)], r in [5]
+        Random.seed!(0)
+        sample_idxs = [CartesianIndex(1,1,2), CartesianIndex(3,5,1), CartesianIndex(7,8,9)]
+        sample_vals = [0.5, -4.56, 1056.43243]
+        #X = SparseTensorCOO(sz, sample_idxs, sample_vals)
+        X = SparseArray{Float64, 3}(Dict([(sample_idxs[i], sample_vals[i]) for i in eachindex(sample_idxs)]), sz)
+        U = randn.(sz, r)
+        N = 3
+        G = similar.(U)
+        sparse_mttkrps!(G, X, U)
         @test all(mttkrps(X, U) .≈ G)
     end
 end
