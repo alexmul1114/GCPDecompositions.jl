@@ -538,6 +538,34 @@ end
     end
 end
 
+@testitem "stochastic-gradients-unsupported" begin
+    using GCPDecompositions:
+        default_constraints,
+        default_init_sym,
+        GCPLosses,
+        GCPAlgorithms
+
+    @testset "unsupported sampling strategies" begin
+        # Form tensor
+        sz = 10
+        r = 3
+        U_star = randn(sz, r)
+        X = zeros(sz, sz, sz)
+        for i1 in axes(U_star, 1), i2 in axes(U_star, 1), i3 in axes(U_star, 1)
+            X[i1, i2, i3] = sum(U_star[i1, :] .* U_star[i2, :] .* U_star[i3, :])
+        end
+
+        loss = GCPLosses.LeastSquares()
+        constraints = default_constraints(loss)
+        algorithm = GCPAlgorithms.Adam()
+        S = (1, 1, 1)
+        M0 = default_init_sym(X, r, loss, constraints, algorithm, S)
+
+        GU_stochastic = (similar(U_star), ones(r))
+        @test_throws ErrorException GCPLosses.stochastic_grad_U_λ!(GU_stochastic, M0, X, loss, false, 0.1, CartesianIndices(X), "semistratified")
+    end
+end
+
 @testitem "symgcp-lbfgs" begin
     using Random, IntervalSets
     using Distributions
@@ -550,7 +578,7 @@ end
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
 
-    @testset "unsupported constraints" begin
+    @testset "unsupported domain, constraints" begin
         @test_throws ErrorException symgcp(
             randn(5,5,5),
             2,
@@ -561,8 +589,8 @@ end
             randn(5,5,5),
             2,
             (1,2,3);
-            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(1, Inf)),
-            constraints = (),
+            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(0, Inf)),
+            constraints = (GCPConstraints.LowerBound(1.0),),
         )
     end
 
@@ -614,7 +642,37 @@ end
         Minit = SymCPD(ones(r), Uinit, (1,2,3))
         Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), 
                                 algorithm = GCPAlgorithms.Adam(sampling_strategy="stratified", p=nnz, s=length(X)-nnz, τ=1000))
-        println(maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)))
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-4
+    end
+end
+
+@testitem "symgcp-adam-unsupported" begin
+    using IntervalSets
+ 
+    @testset "unsupported domain, constraints" begin
+        @test_throws ErrorException symgcp(
+            randn(5,5,5),
+            2,
+            (1,2,3);
+            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(1, Inf)),
+            algorithm = GCPAlgorithms.Adam()
+        )
+        @test_throws ErrorException symgcp(
+            randn(5,5,5),
+            2,
+            (1,2,3);
+            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(0, Inf)),
+            algorithm = GCPAlgorithms.Adam(),
+            constraints = (GCPConstraints.LowerBound(1.0),),
+        )
+    end
+    @testset "unsupported sampling strategy" begin
+        @test_throws ErrorException symgcp(
+            randn(5,5,5),
+            2,
+            (1,2,3);
+            loss = GCPLosses.LeastSquares(),
+            algorithm = GCPAlgorithms.Adam(sampling_strategy="semistratified"),
+        )
     end
 end
