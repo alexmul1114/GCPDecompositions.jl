@@ -605,11 +605,16 @@ end
     end
     @testset "nonsymmetric, stratified, size(X)=$sz, rank(X)=$r" for sz in [(10, 15, 20)], r in 1:2
         Random.seed!(0)
-        M = SymCPD(ones(r), sprand.(sz, r, 0.5), (1,2,3))
+        U = sprand.(sz, r, 0.5)
+        M = SymCPD(ones(r), U, (1,2,3))
         X = [M[I] for I in CartesianIndices(size(M))]
         nnz = count((!iszero).(X))
         # Run Adam with large batch size
-        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), algorithm = GCPAlgorithms.Adam(sampling_strategy="stratified", p=nnz, s=length(X)-nnz, τ=250))
+        Uinit = map(Ui -> Ui .+ randn(size(Ui)) * 0.00001, U)
+        Minit = SymCPD(ones(r), Uinit, (1,2,3))
+        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), 
+                                algorithm = GCPAlgorithms.Adam(sampling_strategy="stratified", p=nnz, s=length(X)-nnz, τ=1000))
+        println(maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)))
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-4
     end
 end
