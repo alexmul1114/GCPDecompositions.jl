@@ -36,7 +36,7 @@ function _gcp(
     r,
     loss,
     constraints::Tuple{Vararg{GCPConstraints.LowerBound}},
-    regularizer, 
+    regularizers, 
     algorithm::GCPAlgorithms.LBFGSB,
     init,
 ) where {TX,N}
@@ -71,12 +71,12 @@ function _gcp(
     vec_ranges = ntuple(k -> vec_cutoffs[k]+1:vec_cutoffs[k+1], Val(N))
     function f(u)
         U = map(range -> reshape(view(u, range), :, r), vec_ranges)
-        return GCPLosses.objective(CPD(ones(T, r), U), X, loss, regularizer)
+        return GCPLosses.objective(CPD(ones(T, r), U), X, loss, regularizers)
     end
     function g!(gu, u)
         U = map(range -> reshape(view(u, range), :, r), vec_ranges)
         GU = map(range -> reshape(view(gu, range), :, r), vec_ranges)
-        GCPLosses.grad_U!(GU, CPD(ones(T, r), U), X, loss, regularizer)
+        GCPLosses.grad_U!(GU, CPD(ones(T, r), U), X, loss, regularizers)
         return gu
     end
 

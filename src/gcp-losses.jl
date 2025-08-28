@@ -104,8 +104,8 @@ function grad_U! end
 Compute the GCP objective function for the model tensor `M`, data tensor `X`,
 loss function `loss`, and regularizer `regularizer``.
 """
-function objective(M::CPD{T,N}, X::Array{TX,N}, loss, regularizer) where {T,TX,N}
-    return sum(value(loss, X[I], M[I]) for I in CartesianIndices(X) if !ismissing(X[I])) + value(regularizer, M.U)
+function objective(M::CPD{T,N}, X::Array{TX,N}, loss, regularizers) where {T,TX,N}
+    return sum(value(loss, X[I], M[I]) for I in CartesianIndices(X) if !ismissing(X[I])) + sum(reg -> value(reg, M.U), regularizers; init=zero(eltype(M.U[1])))
 end
 
 """
@@ -120,7 +120,7 @@ function grad_U!(
     M::CPD{T,N},
     X::Array{TX,N},
     loss,
-    regularizer,
+    regularizers,
 ) where {T,TX,N,TGU<:AbstractMatrix{T}}
     Y = [
         ismissing(X[I]) ? zero(nonmissingtype(eltype(X))) : deriv(loss, X[I], M[I]) for
@@ -130,10 +130,13 @@ function grad_U!(
     for k in 1:N
         rmul!(GU[k], Diagonal(M.λ))
     end
-    reg_factors = map(similar, GU)
-    grad_U!(reg_factors, regularizer, M.U)
-    for i in eachindex(GU)
-        GU[i] .+= reg_factors[i]
+    
+    for regularizer in regularizers
+        reg_factors = map(similar, GU)
+        grad_U!(reg_factors, regularizer, M.U)
+        for i in eachindex(GU)
+            GU[i] .+= reg_factors[i]
+        end
     end
     return GU
 end
@@ -426,22 +429,6 @@ value(loss::UserDefined, x, m) = loss.func(x, m)
 deriv(loss::UserDefined, x, m) = loss.deriv(x, m)
 domain(loss::UserDefined) = loss.domain
 
-# No regularization
-"""
-    NullRegularizer
-
-Type for no regularization
-
-"""
-struct NullRegularizer{} <: AbstractRegularizer end
-value(reg::NullRegularizer, U::NTuple) = zero(eltype(U[1]))
-function grad_U!(GU::NTuple{N,TGU}, reg::NullRegularizer, U::NTuple{N,TU}) where {T,N,TGU<:AbstractMatrix{T},TU<:AbstractMatrix{T}}
-    for n in eachindex(U)
-        GU[n] .= zeros(eltype(U[n]), size(U[n]))
-    end
-    return GU
-end
-
 
 # Column-norm regularization
 """
@@ -463,7 +450,6 @@ struct ColumnNormRegularizer{S<:Real, T<:Real} <: AbstractRegularizer
     end 
 end
 ColumnNormRegularizer(γ::S = 0.1, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
-ColumnNormRegularizer(γ::S, α::T = 1.0) where {S<:Real,T<:Real} = ColumnNormRegularizer{S,T}(γ, α)
 value(reg::ColumnNormRegularizer, U::NTuple) = reg.γ * sum(sum((norm(U[n][:, r])^2 - reg.α)^2 for r in 1:size(U[1])[2]) for n in eachindex(U))
 function grad_U!(GU::NTuple{N,TGU}, reg::ColumnNormRegularizer, U::NTuple{N,TU}) where {T,N,TGU<:AbstractMatrix{T},TU<:AbstractMatrix{T}}
     for n in eachindex(U)
