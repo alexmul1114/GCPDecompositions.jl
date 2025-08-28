@@ -200,7 +200,7 @@ function _normalizecomps!(
     end
     for k in Base.OneTo(ngroups(M))
         if dist_U[k]
-            M.U[k] .*= excess .^ (1 / count(==(k), M.S))
+            M.U[k] .*= excess 
         end
     end
 

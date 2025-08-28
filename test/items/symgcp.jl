@@ -557,6 +557,13 @@ end
             (1,2,3);
             loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(1, Inf)),
         )
+        @test_throws ErrorException symgcp(
+            randn(5,5,5),
+            2,
+            (1,2,3);
+            loss = GCPLosses.UserDefined((x, m) -> (x - m)^2; domain = Interval(1, Inf)),
+            constraints = (),
+        )
     end
 
     @testset "fully symmetric, size(X)=$sz, rank(X)=$r" for sz in [(15,15,15), (30,30,30)], r in 1:2
@@ -586,6 +593,7 @@ end
 
 @testitem "symgcp-adam" begin
     using Random
+    using SparseArrays
 
     @testset "nonsymmetric, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25)], r in 1:2
         Random.seed!(0)
@@ -593,6 +601,15 @@ end
         X = [M[I] for I in CartesianIndices(size(M))]
         # Run Adam with large batch size
         Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), algorithm = GCPAlgorithms.Adam(s=length(X), τ=100))
+        @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
+    end
+    @testset "nonsymmetric, stratified, size(X)=$sz, rank(X)=$r" for sz in [(15, 20, 25)], r in 1:2
+        Random.seed!(0)
+        M = SymCPD(ones(r), sprand.(sz, r, 0.5), (1,2,3))
+        X = [M[I] for I in CartesianIndices(size(M))]
+        nnz = count((!iszero).(X))
+        # Run Adam with large batch size
+        Mh, _, _, _ = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares(), algorithm = GCPAlgorithms.Adam(p=nnz, s=length(X)-nnz, τ=100))
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
 end

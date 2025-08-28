@@ -246,13 +246,31 @@ end
         @test isapprox(norm.(eachcol(M_norm.U[1])), ones(r))
         @test maximum(I -> abs(M_orig[I] - M_norm[I]), CartesianIndices(X)) <= 1e-5
     end 
-    @testset "4way,r=$r" for r in [1,3]
-        sz = 10
-        M_orig = SymCPD(ones(r), (rand(sz,r),), (1,1,1,1))
+    @testset "3way,r=$r,partially symmetric" for r in [1,3]
+        sz1 = 10
+        sz2 = 20
+        M_orig = SymCPD(ones(r), (rand(sz1,r),rand(sz2,r)), (1,1,2))
         M_norm = deepcopy(M_orig)
         X = Array(M_orig)
         normalizecomps!(M_norm)
         @test isapprox(norm.(eachcol(M_norm.U[1])), ones(r))
+        @test maximum(I -> abs(M_orig[I] - M_norm[I]), CartesianIndices(X)) <= 1e-5
+    end 
+    @testset "4way,r=$r" for r in [1,3]
+        sz = 10
+        M_orig = SymCPD(ones(r), (rand(sz,r),), (1,1,1,1))
+        M_norm = normalizecomps(M_orig)
+        X = Array(M_orig)
+        @test isapprox(norm.(eachcol(M_norm.U[1])), ones(r))
+        @test maximum(I -> abs(M_orig[I] - M_norm[I]), CartesianIndices(X)) <= 1e-5
+    end 
+    @testset "3way,r=$r,dist-U" for r in [1,3]
+        sz = 10
+        M_orig = SymCPD(ones(r)*2, (rand(sz,r),), (1,1,1))
+        M_norm = deepcopy(M_orig)
+        X = Array(M_orig)
+        normalizecomps!(M_norm, distribute_to=1)
+        @test isapprox(M_norm.λ, ones(r))
         @test maximum(I -> abs(M_orig[I] - M_norm[I]), CartesianIndices(X)) <= 1e-5
     end 
 end
