@@ -45,6 +45,30 @@ function _gcp!(
     return M
 end
 
+function _gcp!(
+    rng::AbstractRNG,
+    M::CPD{Float32,N},
+    X::MtlArray{<:Real,N},
+    loss::LeastSquaresLoss,
+    constraints::Tuple{},
+    algorithm::CP_FastALS,
+) where {N}
+    # Determine order of modes of MTTKRP to compute
+    Jns = [prod(size(X)[1:n]) for n in 1:N]
+    Kns = [prod(size(X)[(n+1):end]) for n in 1:N]
+    Kn_minus_ones = [prod(size(X)[n:end]) for n in 1:N]
+    n_star = findlast(n -> Jns[n] <= Kn_minus_ones[n], 1:N)
+    order = vcat([i for i in n_star:-1:1], [i for i in (n_star+1):N])
+
+    buffers = create_CP_FastALS_buffers(M.U, order, Jns, Kns)
+
+    for _ in 1:algorithm.maxiters
+        CP_FastALS_iter!(X, M, order, Jns, Kns, buffers)
+    end
+
+    return M
+end
+
 """
     CP_FastALS_iter!(X, U, λ) 
 
@@ -154,9 +178,13 @@ function CP_FastALS_iter!(X, M, order, Jns, Kns, buffers)
         end
         # Normalization, update weights
         V = reduce(.*, M.U[i]'M.U[i] for i in setdiff(1:N, n))
-        rdiv!(M.U[n], lu!(V))
-        M.λ .= norm.(eachcol(M.U[n]))
-        M.U[n] ./= permutedims(M.λ)
+        U_cpu = Array(M.U[n])
+        V_cpu = Array(V)
+        rdiv!(U_cpu, lu!(V_cpu))
+        copyto!(M.U[n], U_cpu)
+        #M.λ .= norm.(eachcol(M.U[n]))
+        copyto!(M.λ, norm.(eachcol(U_cpu)))  # Cannot use .= for MtlArrays
+
     end
 end
 

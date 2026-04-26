@@ -92,3 +92,84 @@ function _gcp!(
     end
     return M
 end
+
+function _gcp!(
+    rng::AbstractRNG,
+    M::CPD{Float32,N},
+    X::MtlArray{<:Real,N},
+    loss::AbstractLoss,
+    constraints::Tuple{Vararg{LowerBoundConstraint}},
+    algorithm::GCP_LBFGSB,
+) where {N}
+    r = ncomps(M)
+    T = Float32    # Need Float32 for Metal
+
+    # Compute lower bound from constraints
+    lower = maximum(constraint.value for constraint in constraints; init = T(-Inf))
+
+    # Error for unsupported loss/constraint combinations
+    dom = domain(loss)
+    if dom == Interval(-Inf, +Inf)
+        lower in (-Inf, 0.0) ||
+            error("only lower bound constraints of `-Inf` or `0` are (currently) \
+                   supported for loss functions with a domain of `-Inf .. Inf`")
+    elseif dom == Interval(0.0, +Inf)
+        lower == 0.0 || error("only lower bound constraints of `0` are (currently) \
+                               supported for loss functions with a domain of `0 .. Inf`")
+    else
+        error("only loss functions with a domain of `-Inf .. Inf` \
+               or `0 .. Inf` are (currently) supported")
+    end
+
+    # Initialization - grabbing relevant code from cpd.jl instead of rewriting function for MtlArrays there
+    zero_to_one(x) = iszero(x) ? oneunit(x) : x
+    norms = map(zero_to_one ∘ abs, M.λ)
+    M.λ ./= norms
+    excess = Metal.ones(T, 1, ncomps(M))
+    excess .*= reshape(norms, 1, ncomps(M))
+    excess .= excess .^ Float32((1 / ndims(M)))
+    for k in Base.OneTo(N)
+        M.U[k] .*= excess
+    end
+
+    M.U[1] .*= permutedims(sign.(M.λ))
+    M.λ .= oneunit(T)
+    project!(M, LowerBoundConstraint(lower))
+    U0 = M.U
+    u0 = vcat(vec.(U0)...)
+
+    # Setup vectorized objective function and gradient
+    vec_cutoffs = (0, cumsum(r .* size(X))...)
+    vec_ranges = ntuple(k -> (vec_cutoffs[k]+1):vec_cutoffs[k+1], Val(N))
+    function f(u, p)
+        U = map(range -> reshape(view(u, range), :, r), vec_ranges)
+        return gcp_objective(CPD(ones(T, r), U), X, loss)
+    end
+    function g!(gu, u)
+        U = map(range -> reshape(view(u, range), :, r), vec_ranges)
+        GU = map(range -> reshape(view(gu, range), :, r), vec_ranges)
+        gcp_grad_U!(GU, CPD(ones(T, r), U), X, loss)
+        return gu
+    end
+
+    # Run LBFGSB using Optimazation.jl version
+    opt_func = OptimizationFunction(f, grad=g!)
+    u = solve(OptimizationProblem(
+            opt_func,
+            u0;
+            lb = MtlArray(fill(Float32(lower), length(u0))),
+            ub = MtlArray(fill(Inf32, length(u0)))
+        ),
+        LBFGS()
+    )
+
+
+    # Run LBFGSB
+    #lbfgsopts = (; (pn => getproperty(algorithm, pn) for pn in propertynames(algorithm))...)
+    #u = lbfgsb(f, g!, u0; lb = fill(lower, length(u0)), lbfgsopts...)[2]
+
+    for k in 1:N
+        M.U[k] .= reshape(u[vec_ranges[k]], :, r)
+    end
+    return M
+end

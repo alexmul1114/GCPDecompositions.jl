@@ -31,7 +31,7 @@ See also: `CPD`, `AbstractLoss`, `AbstractConstraint`, `AbstractGCPAlgorithm`.
 function gcp(
     X,
     r;
-    rng = default_rng(),
+    rng = default_gcp_rng(X),
     loss = LeastSquaresLoss(),
     constraints = default_gcp_constraints(X, r, loss),
     algorithm = default_gcp_algorithm(X, r, loss, constraints),
@@ -72,6 +72,21 @@ function gcp(
 
     # Call internal function with normalized inputs
     return _gcp!(rng, _M, X, _loss, _constraints, algorithm)
+end
+
+# Default rng
+
+"""
+    default_gcp_rng(X)
+
+Return a default rng based on the type of `X`.
+"""
+function default_gcp_rng(X)
+    if X isa MtlArray
+        return MPS.default_rng()
+    else
+        return default_rng()
+    end
 end
 
 # Default constraints
@@ -140,6 +155,24 @@ function default_gcp_init(rng, X, r, loss::AbstractLoss, constraints, algorithm)
     Xnorm = sqrt(sum(abs2, skipmissing(X)))
     for k in Base.OneTo(N)
         M.U[k] .*= (Xnorm / Mnorm)^(1 / N)
+    end
+
+    return M
+end
+
+function default_gcp_init(rng, X::MtlArray, r, loss::AbstractLoss, constraints, algorithm)
+    # Generate CPD with random factors
+    T, N = nonmissingtype(eltype(X)), ndims(X)
+    T = promote_type(T, Float32)  # Cannot have Float64 for MtlArrays
+    # M = CPD(ones(T, r), rand.(rng, T, size(X), r))
+    M = CPD(Metal.ones(T, r), Random.rand.(rng, T, size(X), r))   # rng is now a Metal.MPS.default_rng()
+
+    # Normalize
+    Mnorm = norm(M)
+    #Xnorm = sqrt(sum(abs2, skipmissing(X)))
+    Xnorm = norm(X)  # MtlArrays cannot have missings
+    for k in Base.OneTo(N)
+        M.U[k] .*= Float32((Xnorm / Mnorm)^(1 / N))
     end
 
     return M

@@ -135,3 +135,117 @@ function _gcp!(
     # Return final value
     return CPD(ones(T, r), A)
 end
+
+function _gcp!(
+    rng::AbstractRNG,
+    M::CPD{Float32,N},
+    X::MtlArray{<:Real,N},
+    loss::AbstractLoss,
+    constraints::Tuple{Vararg{LowerBoundConstraint}},
+    algorithm::GCP_Adam,
+) where {N}
+    r = ncomps(M)
+    T = Float32    # Metal only supports Float32
+
+    # Compute lower bound from constraints
+    lower = maximum(constraint.value for constraint in constraints; init = T(-Inf))
+
+    # Error for unsupported fsampler
+    algorithm.fsampler isa FullGCPSampler || error(
+        "GCP-Adam with Metal only supports FullGCPSampler currently."
+    )
+
+    # Error for unsupported loss/constraint combinations
+    dom = domain(loss)
+    if dom == Interval(-Inf, +Inf)
+        lower in (-Inf, 0.0) || error(
+            "only lower bound constraints of `-Inf` or `0` are (currently) supported for loss functions with a domain of `-Inf .. Inf`",
+        )
+    elseif dom == Interval(0.0, +Inf)
+        lower == 0.0 || error(
+            "only lower bound constraints of `0` are (currently) supported for loss functions with a domain of `0 .. Inf`",
+        )
+    else
+        error(
+            "only loss functions with a domain of `-Inf .. Inf` or `0 .. Inf` are (currently) supported",
+        )
+    end
+
+    # Normalize / project the provided initialization
+
+    # Initialization - grabbing relevant code from cpd.jl instead of rewriting function for MtlArrays there
+    zero_to_one(x) = iszero(x) ? oneunit(x) : x
+    norms = map(zero_to_one ∘ abs, M.λ)
+    M.λ ./= norms
+    excess = Metal.ones(T, 1, ncomps(M))
+    excess .*= reshape(norms, 1, ncomps(M))
+    excess .= excess .^ Float32((1 / ndims(M)))
+    for k in Base.OneTo(N)
+        M.U[k] .*= excess
+    end
+    #normalizecomps!(M; dims = :λ, distribute_to = 1:ndims(M))
+
+    M.U[1] .*= permutedims(sign.(M.λ))
+    M.λ .= oneunit(T)
+    project!(M, LowerBoundConstraint(lower))
+
+    # Setup fsampler
+    fsampler = GCPSampleOnce(X, algorithm.fsampler)
+
+    # Initialize
+    A = M.U       # factor matrices
+    B = zero.(A)  # first moment estimates
+    C = zero.(A)  # second moment estimates
+    F = gcp_stoch_objective(rng, CPD(ones(T, r), A), X, loss, fsampler)  # objective function value
+    G = similar.(A)  # gradients
+
+    # Main loop
+    nfails = 0
+    niters = 0
+    Aprev, Bprev, Cprev = similar.(A), similar.(B), similar.(C)
+    for _ in 1:algorithm.maxepochs
+        # Save copies of variables in case of a bad epoch
+        for k in 1:N
+            copyto!(Aprev[k], A[k])
+            copyto!(Bprev[k], B[k])
+            copyto!(Cprev[k], C[k])
+        end
+        Fprev = F
+
+        # Epoch loop
+        for _ in 1:algorithm.epochiters
+            niters += 1
+            gcp_stoch_grad_U!(rng, G, CPD(ones(T, r), A), X, loss, algorithm.gsampler)
+            for k in 1:N
+                B[k] .= algorithm.β1 .* B[k] .+ (1 - algorithm.β1) .* G[k]
+                C[k] .= algorithm.β2 .* C[k] .+ (1 - algorithm.β2) .* G[k] .^ 2
+                A[k] .=
+                    max.(
+                        lower,
+                        A[k] .-
+                        (algorithm.faildecay^nfails * algorithm.α) .*
+                        (B[k] ./ (1 - algorithm.β1^niters)) ./
+                        sqrt.((C[k] ./ (1 - algorithm.β2^niters)) .+ algorithm.ϵ),
+                    )
+            end
+        end
+
+        # Check failure and termination criterion
+        F = gcp_stoch_objective(rng, CPD(ones(T, r), A), X, loss, fsampler)
+        if F > Fprev
+            @info "Failed epoch, rewinding to previous epoch"
+            for k in 1:N
+                copyto!(Aprev[k], A[k])
+                copyto!(Bprev[k], B[k])
+                copyto!(Cprev[k], C[k])
+            end
+            F = Fprev
+            niters -= algorithm.epochiters
+            nfails += 1
+            nfails > algorithm.maxfails && break
+        end
+    end
+
+    # Return final value
+    return CPD(ones(T, r), A)
+end

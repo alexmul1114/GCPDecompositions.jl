@@ -9,10 +9,13 @@ using Base.Order: Ordering, Reverse
 using ForwardDiff: ForwardDiff
 using IntervalSets: Interval
 using LBFGSB: lbfgsb
-using LinearAlgebra: LinearAlgebra, Diagonal, lu!, mul!, norm, rdiv!, rmul!
-using Random: AbstractRNG, default_rng
+using Optimization: OptimizationFunction, OptimizationProblem, solve
+using OptimizationOptimJL: LBFGS
+using LinearAlgebra: LinearAlgebra, Diagonal, lu!, lu, mul!, norm, rdiv!, rmul!
+using Random: Random, AbstractRNG, default_rng
 using SparseArrays: sparse
 using StatsBase: sample, sample!
+using Metal: Metal, MPS, MtlArray, @metal
 
 # Tensor Kernels
 include("base-kernels/khatrirao.jl")
@@ -68,8 +71,9 @@ include("decomp-gcp/stoch-obj-grad/abstract.jl")
 include("decomp-gcp/stoch-obj-grad/uniform.jl")
 include("decomp-gcp/stoch-obj-grad/stratified.jl")
 include("decomp-gcp/stoch-obj-grad/semistratified.jl")
+include("decomp-gcp/stoch-obj-grad/full.jl")
 export AbstractGCPSampler, GCPSampleOnce, gcp_stoch_objective, gcp_stoch_grad_U!
-export UniformGCPSampler, StratifiedGCPSampler, SemistratifiedGCPSampler
+export UniformGCPSampler, StratifiedGCPSampler, SemistratifiedGCPSampler, FullGCPSampler
 
 # Algorithms
 include("decomp-gcp/algorithms/abstract.jl")
