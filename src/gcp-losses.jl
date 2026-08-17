@@ -754,6 +754,251 @@ This function currently doesa permutedims on the factor matrices in Xs, but
     end
 end
 
+# Find split points for outer loop such that load across threads is (close) to balanced,
+# and starting vec_idxs for each thread
+@generated function threading_plan(
+    S::NTuple{N,Int}, 
+    cell_sizes::NTuple{K,Int}, 
+    num_threads::Int,
+    ::Val{N}
+) where {N,K}
+    quote
+        total_sz = 1
+        for k in 1:$K
+            total_sz *= binomial(cell_sizes[k] + count(S .== k) - 1, count(S .== k))
+        end 
+        chunk_iters = div(total_sz, num_threads)
+        iN_starts = [1]
+        vec_idx_starts = [1]
+        vec_idx = 1
+        chunk_idx = 1
+        @nloops(
+            $N,
+            i,
+            k -> (k == $N ? 1 : S[k] == S[k+1] ? i_{k+1} : 1):cell_sizes[S[k]],
+            k -> k == $N ? 
+                begin
+                    if chunk_idx > chunk_iters
+                        push!(iN_starts, i_{$N})
+                        push!(vec_idx_starts, vec_idx)
+                        chunk_idx = chunk_idx - chunk_iters
+                    end
+                end
+                : nothing,
+            begin
+                chunk_idx += 1
+                vec_idx += 1
+            end
+        )
+        return iN_starts, vec_idx_starts
+    end
+end
+
+function factor_grad_ttv_multithread!(
+    GU_λ::NTuple{V, AbstractArray},
+    Y_vec::AbstractVector, 
+    M::SymCPD{T,N,K}, 
+    multinomial_coefs::Vector{TC},
+    iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
+    num_threads::Int,
+    cell::Int
+) where {V,T,N,K,TC}
+    (1 <= cell <= K) || 
+        throw(ArgumentError("`cell` must satisfy 1 <= cell <= ngroups(M)"))
+
+    GU_T = zeros(T, size(GU_λ[cell], 2), size(GU_λ[cell], 1))
+    columnwise_ttv_all_modes_except_one_multithread!(GU_T, Y_vec, M.U, multinomial_coefs, iN_starts, vec_idx_starts, num_threads, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
+    GU_λ[cell] .= permutedims(GU_T)
+    rmul!(GU_λ[cell], Diagonal(M.λ))
+    return GU_λ[cell]
+end
+
+function columnwise_ttv_all_modes_except_one_multithread!(
+    result::AbstractMatrix,
+    y::Vector{TY}, Xs::NTuple{K,AbstractMatrix{TX}}, 
+    multinomial_coefs::Vector{TC},
+    iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
+    num_threads::Int,
+    ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
+) where {TY,K,TX,TC, S,c,N,R}
+
+    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
+    partial_results = [t == 1 ? result : zeros(TX, R, size(result,2)) for t in 1:num_threads]
+
+    Threads.@threads for t in 1:num_threads
+        lo = iN_starts[t]
+        hi = t == num_threads ? size(XsT[K], 2) : iN_starts[t+1] - 1
+        v0 = vec_idx_starts[t]
+        _columnwise_ttv_all_modes_except_one_chunk!(partial_results[t], y, XsT, multinomial_coefs, lo, hi, v0,
+                    Val(S), Val(c), Val(N), Val(R))
+    end
+    for t in 2:num_threads
+        @inbounds for I in eachindex(result)
+            result[I] += partial_results[t][I]
+        end
+    end
+    return result
+end
+
+
+# TTV in all modes except one with outer loop chunk defined by iN_lo, iN_hi,
+# for multithreading across outer loop.
+@generated function _columnwise_ttv_all_modes_except_one_chunk!(
+    result::AbstractMatrix,
+    y::Vector{TY}, 
+    XsT::NTuple{K,AbstractMatrix{TX}}, 
+    multinomial_coefs::Vector{TC}, 
+    iN_lo::Int, iN_hi::Int, vec_idx_start::Int,
+    ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
+) where {TY,K,TX,TC,S,c,N,R}
+
+    num_modes_cell = count(==(c), S)
+    mode = findfirst(==(c), S)
+    last_mode_cell = mode + num_modes_cell - 1
+    acc_modes = [j + mode - 1 for j in 1:num_modes_cell if j + mode - 1 >= 2]
+
+    need_pref = last_mode_cell >= 3  # Flag whether we can save multiplies by computing prefix products
+    x_needed  = sort!(unique!([collect(2:last_mode_cell-1); collect(mode+1:N)])) # Included X in prefix/suffix products, excluding mode 1
+    peel = (mode == 1 && num_modes_cell >= 2)  # Flag whether to peel first i_1 iteration
+    
+    # Define functions for different symbols in expressions
+    Iv(d)=Symbol(:i_,d);  Pv(d)=Symbol(:p_,d);   Av(d)=Symbol(:acc_,d)
+    Xv(d)=Symbol(:x_,d);  SUF(d)=Symbol(:suf_,d); SP(d)=Symbol(:sp_,d)
+    XM(d)=Symbol(:X_, S[d])  # transposed factor matrix at loop position d, defined in quote
+    col_assign_loop(lhs, rhs) = :(for col in 1:$R; $lhs = $rhs; end)
+
+    pre_exprs  = [Any[] for _ in 1:N]
+    post_exprs = [Any[] for _ in 1:N]
+    
+    # Add pre- and post-expressions for each level
+    for d in 1:N
+        # Load row i_d of matrix X[S[d]] into x_d (pre)
+        d in x_needed && push!(pre_exprs[d],
+            col_assign_loop(:($(Xv(d))[col]), :($(XM(d))[col, $(Iv(d))])))
+
+        # Compute suffix product x_d * ... * x_N (pre) if it will be used
+        if d > mode
+            push!(pre_exprs[d], col_assign_loop(:($(SUF(d))[col]),
+                d == N ? :($(Xv(d))[col]) : :($(Xv(d))[col] * $(SUF(d+1))[col])))
+        end
+
+        # Compute coefficient p_d, the multiplicity of i_d among i_j for j in d:last_mode_cell (pre)
+        if d >= max(mode, 2) && d <= last_mode_cell
+            push!(pre_exprs[d], d == last_mode_cell ? :($(Pv(d)) = 1) :
+                :($(Pv(d)) = ifelse($(Iv(d)) == $(Iv(d+1)), $(Pv(d+1)) + 1, 1)))
+        end
+
+        # For level d = 2, compute i_1 loop-invariant product sp_D = p_D * prod_{k=2...N, k != D} x_k,
+        # i.e., the leave-one-out-product excluding x_1, but including the coefficient p_D,
+        # for D in {2,..,last_mode_cell} if D >= mode (pre).
+        # Also compute prefix product x_2 * ... * x_{last_mode_cell - 1} (pre).
+        if d == 2
+            need_pref && push!(pre_exprs[2], :(fill!(pref, one($TX))))
+            for D in 2:last_mode_cell
+                if D >= mode
+                    fac = Any[Pv(D)]
+                    D > 2 && push!(fac, :(pref[col]))
+                    D < N && push!(fac, :($(SUF(D+1))[col]))
+                    push!(pre_exprs[2], col_assign_loop(:($(SP(D))[col]),
+                        length(fac) == 1 ? only(fac) : Expr(:call, :*, fac...)))
+                end
+                D < last_mode_cell && push!(pre_exprs[2],
+                    col_assign_loop(:(pref[col]), :(pref[col] * $(Xv(D))[col])))
+            end
+        end
+
+        # Zero (pre) and flush (post) accumulators
+        if d in acc_modes
+            !(peel && d == 2) && push!(pre_exprs[d], :(fill!($(Av(d)), zero($TX)))) # If peel && d == 2 we directly overwrite acc_2
+            push!(post_exprs[d], :(for col in 1:$R
+                                    result[col, $(Iv(d))] += $(Av(d))[col]
+                                end))
+        end
+    end
+
+    # Peel off first iteration of i_1 loop (i.e., i_1 = i_2) when mode == 1 and num_modes_cell >= 2 to reduce branching
+    # and coefficient computation logic (pre).
+    if peel
+        push!(pre_exprs[2], :(yw = multinomial_coefs[vec_idx] * y[vec_idx]))
+        push!(pre_exprs[2], :(tt = (p_2 + 1) * yw))
+        push!(pre_exprs[2], col_assign_loop(:(acc_2[col]), :(tt * suf_2[col])))
+        if last_mode_cell >= 3
+            push!(pre_exprs[2], col_assign_loop(:(yx1[col]), :(yw * x_2[col])))
+            for D in 3:last_mode_cell
+                push!(pre_exprs[2], Expr(:if, :($(Iv(D)) != $(Iv(D-1))),
+                    col_assign_loop(:($(Av(D))[col]),
+                        :(muladd(yx1[col], $(SP(D))[col], $(Av(D))[col])))))
+            end
+        end
+        push!(pre_exprs[2], :(vec_idx += 1))
+    end
+
+    chain(exprs) = Expr(:->, :d, foldr((k, rest) -> isempty(exprs[k]) ? rest :
+                     Expr(:if, :(d == $k), Expr(:block, exprs[k]...), rest),
+                     1:N; init = :nothing))
+    pre, post = chain(pre_exprs), chain(post_exprs)
+
+    # Expressions for allocations
+    alloc = Expr(:block)
+    for d in x_needed;  push!(alloc.args, :($(Xv(d))  = zeros(MVector{$R, $TX}))) end
+    for d in mode+1:N;  push!(alloc.args, :($(SUF(d)) = zeros(MVector{$R, $TX}))) end
+    for D in acc_modes; push!(alloc.args, :($(Av(D))  = zeros(MVector{$R, $TX}))) end
+    for D in acc_modes; push!(alloc.args, :($(SP(D))  = zeros(MVector{$R, $TX}))) end
+    need_pref           && push!(alloc.args, :(pref = zeros(MVector{$R, $TX})))
+    !isempty(acc_modes) && push!(alloc.args, :(yx1  = zeros(MVector{$R, $TX})))
+
+    # Expressions for loop body
+    # Compute value of p_1*yw if mode != 1
+    tt1_def = peel                ? :(tt1 = yw) :
+              mode != 1           ? :nothing :
+              num_modes_cell == 1 ? :(tt1 = yw) :
+                                    :(tt1 = ifelse(i_1 == i_2, p_2 + 1, 1) * yw)
+
+    yx1_def = isempty(acc_modes)  ? :nothing :
+              :(for col in 1:$R
+                    yx1[col] = yw * Xfirst[col, i_1]
+                end)
+
+    quote
+        Sv = $(S)
+        #@nexprs $K k -> (X_k = permutedims(Xs[k])) - permutedims in calling function instead
+        @nexprs $K k -> (X_k = XsT[k])
+        Xfirst = $(Symbol(:X_, S[1]))
+        $alloc
+        vec_idx = vec_idx_start
+        @inbounds @nloops(
+            $N, 
+            i, 
+            k -> (k == $N ? iN_lo :
+                    k == 1 ? $(peel ? :(i_2 + 1) : (S[1] == S[2] ? :(i_2) : 1)) :
+                    Sv[k] == Sv[k+1] ? i_{k+1} : 1) :
+                    (k == $N ? iN_hi : size(XsT[Sv[k]], 2)),
+            $pre, 
+            $post, 
+            begin   # Body expr
+                yw = multinomial_coefs[vec_idx] * y[vec_idx]
+                $tt1_def
+                $yx1_def
+                @nexprs $num_modes_cell j -> begin
+                    if (j == 1 ? true : i_{j+$mode-1} != i_{j+$mode-2})
+                        if j > $(2 - mode)
+                            for col in 1:$R
+                                acc_{j+$mode-1}[col] = muladd(yx1[col], sp_{j+$mode-1}[col], acc_{j+$mode-1}[col])
+                            end
+                        else
+                            for col in 1:$R
+                                result[col, i_1] = muladd(tt1, suf_2[col], result[col, i_1])
+                            end
+                        end
+                    end
+                end
+                vec_idx += 1
+            end
+        )
+        return result
+    end
+end
+
 """
     make_krp_row_mappings(
         M::SymCPD{T,N,K}, 
