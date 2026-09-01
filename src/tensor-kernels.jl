@@ -9,7 +9,7 @@ using Compat: allequal
 using LinearAlgebra: mul!, rmul!
 using SparseArrays: AbstractSparseMatrix, sparse
 using SparseArrayKit: SparseArray, nonzero_length, nonzero_keys, nonzero_values
-using Base.Cartesian: @nloops, @ntuple
+using Base.Cartesian: @nloops, @ntuple, @nexprs
 using StaticArrays: MVector
 #using SparseTensors: AbstractSparseTensor, numstored, storedindices, storedvalues
 export create_mttkrp_buffer, mttkrp, mttkrp!, mttkrps, mttkrps!, khatrirao, khatrirao!, checksym, sparse_mttkrp!, sparse_mttkrps!, 

@@ -90,12 +90,12 @@ function _symgcp(
     X::Array{TX,N},
     r,
     S::NTuple{N,Int},
-    sym_data_eps,
     loss,
     constraints::Tuple{Vararg{GCPConstraints.LowerBound}},
     algorithm::GCPAlgorithms.LBFGSB,
     init,
-    γ,
+    γ;
+    sym_data=false,
 ) where {TX,N}
     # T = promote_type(nonmissingtype(TX), Float64)
     T = Float64    # LBFGSB.jl seems to only support Float64
@@ -126,7 +126,7 @@ function _symgcp(
 
     # Check if data is symmetric (if it is, gradients can be simplified)
     #sym_data = checksym(X, S, sym_data_eps)
-    sym_data = false
+    # sym_data = false
 
     # Setup vectorized objective function and gradient
     vec_cutoffs = (0, (cumsum(r .* tuple([size(M0.U[k])[1] for k in 1:K]...))...), sum((length(M0.U[k]) for k in 1:K)) + r)

@@ -111,9 +111,8 @@ end
 
 Compute only the unique rows of the Khatri-Rao product of A1, A2, ..., AK,
 with symmetry given by S_reduced, without rescaling each row with the number of times it is duplicated,
-and store the result in Ktilde_T. S_reduced has L groups of symmetric modes, and should include all
+and store the result in Ktilde. S_reduced has L groups of symmetric modes, and should include all
 modes except mode n when computing the Khatri-Rao product for the mode-n MTTKRP.
-Used for KRP-TTSV function for factor gradients.
 """
 function symmetric_kr_unweighted!(Ktilde::AbstractMatrix, S_reduced::NTuple{N}, A::Vararg{AbstractMatrix,L}) where {N, L}
     R = size(Ktilde, 2)

@@ -79,8 +79,9 @@ symgcp(
     constraints = default_constraints(loss),
     algorithm = default_algorithm_sym(X, r, loss, constraints),
     init = default_init_sym(X, r, loss, constraints, algorithm, S),
-    γ = 0.0, 
-) where {N} = GCPAlgorithms._symgcp(X, r, S, sym_data_eps, loss, constraints, algorithm, init, γ)
+    γ = 0.0,
+    sym_data=false
+) where {N} = GCPAlgorithms._symgcp(X, r, S, sym_data_eps, loss, constraints, algorithm, init, γ; sym_data=sym_data)
 
 # Defaults
 
