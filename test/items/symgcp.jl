@@ -114,7 +114,6 @@ end
         GCPLosses.LeastSquares,
         ngroups,
         GCPLosses.grad_U_λ!,
-        GCPLosses.grad_U_λ_symmetric!,
         convertCPD,
         SymCPD
     using LinearAlgebra: norm
