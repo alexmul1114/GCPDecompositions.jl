@@ -275,16 +275,16 @@ function symmetric_grad_multithread!(
     iN_starts, vec_idx_starts = threading_plan(M.S, cell_sizes, nthreads, Val(N));
 	
 	# Fill reduced derivative tensor
-	fill_reduced_Y_vec!(Y_vec_buffer, X, M, loss, Val(N), Val(ncomps(M)))
+	fill_reduced_Y_vec_multithreaded!(Y_vec_buffer, X, M, loss, iN_starts, vec_idx_starts, nthreads)
     
 	# Weights gradient
 	fill!(GU_λ[K+1], zero(T))
-    columnwise_ttv_all_modes_multithread!(GU_λ[K+1], Y_vec_buffer, M.U, multinomial_coefs, iN_starts, vec_idx_starts, num_threads, Val(M.S), Val(N), Val(ncomps(M)))
+    columnwise_ttv_all_modes_multithread!(GU_λ[K+1], Y_vec_buffer, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(N), Val(ncomps(M)))
     
 	# Factor matrix gradients
 	for cell in 1:K
 		GU_T = zeros(T, size(GU_λ[cell], 2), size(GU_λ[cell], 1))
-        columnwise_ttv_all_modes_except_one_multithread!(GU_T, Y_vec, M.U, multinomial_coefs, iN_starts, vec_idx_starts, num_threads, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
+        columnwise_ttv_all_modes_except_one_multithread!(GU_T, Y_vec, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
 	    GU_λ[cell] .= permutedims(GU_T)
 	    rmul!(GU_λ[cell], Diagonal(M.λ))
         GU_λ[cell] .+= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[cell]; dims=1)
@@ -1059,6 +1059,63 @@ end
     end
 end
 
+function fill_reduced_Y_vec_multithreaded!(
+    Y_vec::AbstractVector, 
+    X::Array{TX,N}, M::SymCPD, 
+    loss,
+    iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
+    num_threads::Int,
+) where {TX,N}
+    
+    nchunks = min(num_threads, length(iN_starts)) 
+    
+    Threads.@threads for t in 1:nchunks
+        lo = iN_starts[t]
+        hi = t == nchunks ? size(M.U[M.S[N]], 1) : iN_starts[t+1] - 1
+        v0 = vec_idx_starts[t]
+        _fill_reduced_Y_vec_multithreaded_chunk!(Y_vec, X, M, loss, lo, hi, v0, Val(N), Val(ncomps(M)))
+    end
+
+    return Y_vec
+end
+
+@generated function _fill_reduced_Y_vec_multithreaded_chunk!(
+    partial_Y_vec::AbstractVector, 
+    X::Array, M::SymCPD, 
+    loss, 
+    iN_lo::Int, iN_hi::Int, vec_idx_start::Int,
+    ::Val{N}, ::Val{R}
+) where {N,R}
+    set_partial_m = map(1:R) do j
+        terms = [:(M.U[M.S[$k]][$(Symbol("i_$(k)")), $j]) for k in 2:N]
+        :(partial_prod[$j] = M.λ[$j] * *( $(terms...) ))
+    end
+    pre_body = Expr(:block, set_partial_m...)
+
+    quote
+        S = M.S
+        T = eltype(M.U[1])
+        partial_prod = zeros(MVector{$R, T})
+        mode1_factors = M.U[S[1]]
+        vec_idx = vec_idx_start
+        @inbounds @nloops(
+            $N,
+            i,
+            k -> (k == $N ? iN_lo : S[k] == S[k+1] ? i_{k+1} : 1):(k == $N ? iN_hi : size(M.U[S[k]], 1)),
+            d -> d == 2 ? $pre_body : nothing,
+            begin
+                x = @nref $N X i
+                m = zero(T)
+                for col in 1:$R
+                    m = muladd(mode1_factors[i_1, col], partial_prod[col], m)
+                end 
+                partial_Y_vec[vec_idx] = ismissing(x) ? zero(nonmissingtype(eltype(X))) : GCPDecompositions.GCPLosses.deriv(loss, x, m)
+                vec_idx += 1
+            end
+        )
+    end
+end
+
 function weight_grad_ttv_multithread!(
     GU_λ::NTuple{V, AbstractArray},
     Y_vec::AbstractVector, 
@@ -1081,17 +1138,19 @@ function columnwise_ttv_all_modes_multithread!(
     ::Val{S}, ::Val{N}, ::Val{R}
 ) where {TY,K,TX,TC,S,N,R}
 
-    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
-    partial_results = [t == 1 ? result : zeros(TX, R) for t in 1:num_threads]
+    nchunks = min(num_threads, length(iN_starts)) 
 
-    Threads.@threads for t in 1:num_threads
+    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
+    partial_results = [t == 1 ? result : zeros(TX, R) for t in 1:nchunks]
+
+    Threads.@threads for t in 1:nchunks
         lo = iN_starts[t]
-        hi = t == num_threads ? size(XsT[K], 2) : iN_starts[t+1] - 1
+        hi = t == nchunks ? size(XsT[K], 2) : iN_starts[t+1] - 1
         v0 = vec_idx_starts[t]
         _columnwise_ttv_all_modes_chunk!(partial_results[t], y, XsT, multinomial_coefs, lo, hi, v0,
                     Val(S), Val(N), Val(R))
     end
-    for t in 2:num_threads
+    for t in 2:nchunks
         @inbounds for I in eachindex(result)
             result[I] += partial_results[t][I]
         end
@@ -1189,17 +1248,19 @@ function columnwise_ttv_all_modes_except_one_multithread!(
     ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
 ) where {TY,K,TX,TC, S,c,N,R}
 
-    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
-    partial_results = [t == 1 ? result : zeros(TX, R, size(result,2)) for t in 1:num_threads]
+    nchunks = min(num_threads, length(iN_starts))
 
-    Threads.@threads for t in 1:num_threads
+    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
+    partial_results = [t == 1 ? result : zeros(TX, R, size(result,2)) for t in 1:nchunks]
+
+    Threads.@threads for t in 1:nchunks
         lo = iN_starts[t]
-        hi = t == num_threads ? size(XsT[K], 2) : iN_starts[t+1] - 1
+        hi = t == nchunks ? size(XsT[K], 2) : iN_starts[t+1] - 1
         v0 = vec_idx_starts[t]
         _columnwise_ttv_all_modes_except_one_chunk!(partial_results[t], y, XsT, multinomial_coefs, lo, hi, v0,
                     Val(S), Val(c), Val(N), Val(R))
     end
-    for t in 2:num_threads
+    for t in 2:nchunks
         @inbounds for I in eachindex(result)
             result[I] += partial_results[t][I]
         end
