@@ -144,7 +144,7 @@ function _symgcp(
     use_symmetric_algs = sym_data || symmetrize_data
 
     # Begin timing
-    t0 = time_ns()
+    # t0 = time_ns()
 
     # Symmetrize data if selected
     Xsym = !sym_data && symmetrize_data ? symmetrize_tensor(X, S) : sym_data ? X : nothing
@@ -174,10 +174,11 @@ function _symgcp(
     data = sym_grad_threads > 1 ? (Xsym, multinomial_coefs, sym_grad_threads, iN_starts, vec_idx_starts) : use_symmetric_algs ? (Xsym, multinomial_coefs) : (X,)
     Mfinal = _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, algorithm, vec_ranges, r, S, Val(r))
     
-    elapsed_time = (time_ns() - t0) / 1e9  # Return total time in seconds
-    final_loss = GCPLosses.objective_nonsymdata(Mfinal, X, loss, γ, Val(r))
+    # elapsed_time = (time_ns() - t0) / 1e9  # Return total time in seconds
+    # final_loss = GCPLosses.objective_nonsymdata(Mfinal, X, loss, γ, Val(r))
 
-    return (M=Mfinal, loss=final_loss, time=elapsed_time)
+    # return (M=Mfinal, loss=final_loss, time=elapsed_time)
+    return Mfinal
 end
 
 function _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, algorithm, vec_ranges, r, S, ::Val{R}) where {R}
