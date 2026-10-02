@@ -117,7 +117,7 @@ function Base.copy!(dst::Array, src::CPD; buffers = create_copy_buffers(dst, src
     return dst
 end
 
-function create_copy_buffers(dst::Array, src::CPD{T}) where {T}
+function create_copy_buffers(src::CPD{T}) where {T}
     # Extract dims
     N, sz, r = ndims(src), size(src), ncomps(src)
 

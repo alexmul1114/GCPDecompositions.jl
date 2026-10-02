@@ -1,5 +1,5 @@
 ## Tensor Kernel: checksym
-
+# TODO: Just replace with forming symmetrized tensor and checking if it is equal to original?
 """
     checksym(X, S)
 

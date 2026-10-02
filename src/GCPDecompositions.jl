@@ -23,9 +23,9 @@ export gcp
 export GCPLosses, GCPConstraints, GCPAlgorithms
 export symgcp
 
-include("tensor-kernels.jl")
 include("cpd.jl")
 include("symcpd.jl")
+include("tensor-kernels.jl")
 include("gcp-losses.jl")
 include("gcp-constraints.jl")
 include("gcp-algorithms.jl")
@@ -74,14 +74,15 @@ symgcp(
     X::Array,
     r,
     S::NTuple{N,Int};
-    sym_data_eps = 1e-10,
     loss = GCPLosses.LeastSquares(),
     constraints = default_constraints(loss),
     algorithm = default_algorithm_sym(X, r, loss, constraints),
     init = default_init_sym(X, r, loss, constraints, algorithm, S),
     γ = 0.0,
-    sym_data=false
-) where {N} = GCPAlgorithms._symgcp(X, r, S, loss, constraints, algorithm, init, γ; sym_data=sym_data)
+    sym_data=false,
+    symmetrize_data=false,
+    sym_grad_threads=1,
+) where {N} = GCPAlgorithms._symgcp(X, S, loss, constraints, algorithm, init, γ; sym_data, symmetrize_data, sym_grad_threads)
 
 # Defaults
 
