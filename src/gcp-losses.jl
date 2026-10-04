@@ -69,7 +69,7 @@ function objective(M::CPD{T,N}, X::Array{TX,N}, loss) where {T,TX,N}
 end
 
 """
-    objective(M::SymCPD, X::Array, loss)
+    objective_nonsymdata(M::SymCPD, X::Array, loss)
 
 Compute the symmetric GCP objective function for the symmetric model tensor `M`, 
 nonsymmetric data tensor `X`, and loss function `loss`, with regularization parameter γ.
