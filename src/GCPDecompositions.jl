@@ -69,7 +69,7 @@ gcp(
     init = default_init(X, r, loss, constraints, algorithm),
 ) = GCPAlgorithms._gcp(X, r, loss, constraints, algorithm, init)
 
-
+# Optional callback function evaluated every callback_every iterations for lbfgsb
 symgcp(
     X::Array,
     r,
@@ -82,7 +82,9 @@ symgcp(
     sym_data=false,
     symmetrize_data=false,
     sym_grad_threads=1,
-) where {N} = GCPAlgorithms._symgcp(X, S, loss, constraints, algorithm, init, γ; sym_data, symmetrize_data, sym_grad_threads)
+    callback=nothing,
+    callback_every=100,
+) where {N} = GCPAlgorithms._symgcp(X, S, loss, constraints, algorithm, init, γ; sym_data, symmetrize_data, sym_grad_threads, callback, callback_every)
 
 # Defaults
 

@@ -109,6 +109,8 @@ function _symgcp(
     sym_data=false,
     symmetrize_data=false,
     sym_grad_threads=1,
+    callback=nothing,
+    callback_every=100
 ) where {TX,N}
 
     # Error for unsupported combination of keyword args
@@ -144,7 +146,7 @@ function _symgcp(
     use_symmetric_algs = sym_data || symmetrize_data
 
     # Begin timing
-    # t0 = time_ns()
+    t0 = time_ns()
 
     # Symmetrize data if selected
     Xsym = !sym_data && symmetrize_data ? symmetrize_tensor(X, S) : sym_data ? X : nothing
@@ -172,7 +174,7 @@ function _symgcp(
 
     setting = use_symmetric_algs ? (sym_grad_threads > 1 ? Val(:SymThreaded) : Val(:Sym)) : Val(:NonSym)
     data = sym_grad_threads > 1 ? (Xsym, multinomial_coefs, sym_grad_threads, iN_starts, vec_idx_starts) : use_symmetric_algs ? (Xsym, multinomial_coefs) : (X,)
-    Mfinal = _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, algorithm, vec_ranges, r, S, Val(r))
+    Mfinal = _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, algorithm, vec_ranges, r, S, Val(r); callback, callback_every, t0)
     
     # elapsed_time = (time_ns() - t0) / 1e9  # Return total time in seconds
     # final_loss = GCPLosses.objective_nonsymdata(Mfinal, X, loss, γ, Val(r))
@@ -181,8 +183,45 @@ function _symgcp(
     return Mfinal
 end
 
-function _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, algorithm, vec_ranges, r, S, ::Val{R}) where {R}
+function _symgcp_lbfgsb(
+    setting, data,
+    grad_buffers, u_λ_0, 
+    loss, γ, lower, algorithm, vec_ranges, 
+    r, S, 
+    ::Val{R};
+    callback=nothing,
+    callback_every=100,
+    t0=time_ns()
+) where {R}
+    # Run LBFGSB own the optimizer so f can read the iteration count (isave[30]) for callbacks
+    lbfgsopts = (; (pn => getproperty(algorithm, pn) for pn in propertynames(algorithm))...)
+    n = length(u_λ_0)
+    opt = L_BFGS_B(n, algorithm.m)
+    bounds = vcat(fill(isfinite(lower) ? 1.0 : 0.0, 1, n), fill(lower, 1, n), fill(Inf, 1, n))
+
+    paused = Ref(zero(UInt64))
+    function cb(iter, u_λ)
+        t_cb = time_ns()
+        U = map(range -> reshape(u_λ[range], :, r), vec_ranges[1:length(vec_ranges)-1])
+        λ = u_λ[vec_ranges[length(vec_ranges)]]
+        callback(iter, (t_cb - t0 - paused[]) / 1e9, SymCPD(λ, U, S))
+        paused[] += time_ns() - t_cb
+    end
+
+    last_it, last_rec = Ref(0), Ref(0)
+    prev = copy(u_λ_0)
     function f(u_λ)
+        if !isnothing(callback)
+            it = Int(opt.isave[30])
+            if it != last_it[]  # f may be called multiple times per iteration for line search
+                if it % callback_every == 0
+                    cb(it, prev)
+                    last_rec[] = it
+                end
+                last_it[] = it
+            end
+            copyto!(prev, u_λ)
+        end
         U = map(range -> reshape(view(u_λ, range), :, r), vec_ranges[1:length(vec_ranges)-1])
         λ = view(u_λ, vec_ranges[length(vec_ranges)])
         return _objective(setting, SymCPD(λ, U, S), data, loss, γ, Val(R))
@@ -196,9 +235,10 @@ function _symgcp_lbfgsb(setting, data, grad_buffers, u_λ_0, loss, γ, lower, al
         return gu_λ 
     end
 
-    # Run LBFGSB
-    lbfgsopts = (; (pn => getproperty(algorithm, pn) for pn in propertynames(algorithm))...)
-    u_λ = lbfgsb(f, g!, u_λ_0; lb = fill(lower, length(u_λ_0)), lbfgsopts...)[2]
+    isnothing(callback) || cb(0, u_λ_0)
+    u_λ = opt(f, g!, u_λ_0, bounds; lbfgsopts...)[2]
+    # The final iterate is never followed by another evaluation, so record it here
+    isnothing(callback) || last_rec[] == opt.isave[30] || cb(Int(opt.isave[30]), u_λ)
 
     U = map(range -> reshape(u_λ[range], :, r), vec_ranges[1:length(vec_ranges)-1])
     λ = u_λ[vec_ranges[length(vec_ranges)]]
