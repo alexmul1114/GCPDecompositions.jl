@@ -35,7 +35,7 @@
 
         # Compute gradients with different methods
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_star, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
         
         ref_U = zeros(eltype(M_star.U[1]), sz, r)
         ref_λ = zeros(eltype(M_star.U[1]), r)
@@ -62,7 +62,7 @@
         auto_grad_λ = auto_grad[sz*r+1:end]
 
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_init, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
 
         @test isapprox(GU_nonsym[1], auto_grad_U, rtol=1e-6)
         @test isapprox(GU_nonsym[2], auto_grad_λ, rtol=1e-6)
@@ -111,7 +111,7 @@ end
         
         # Compute gradients with different methods
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_star, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
 
         ref_U1 = zeros(eltype(M_star.U[1]), sz1, r)
         ref_U2 = zeros(eltype(M_star.U[2]), sz2, r)
@@ -144,7 +144,7 @@ end
 
         # Compute gradients with different methods
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_init, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
 
         @test isapprox(GU_nonsym[1], auto_grad_U1, rtol=1e-6)
         @test isapprox(GU_nonsym[2], auto_grad_U2, rtol=1e-6)
@@ -178,7 +178,7 @@ end
 
         # Compute gradients with different methods
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_star, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_star, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
 
         ref_U1 = zeros(eltype(M_star.U[1]), sz1, r)
         ref_U2 = zeros(eltype(M_star.U[2]), sz2, r)
@@ -211,7 +211,7 @@ end
 
         # Compute gradients with different methods
         GCPLosses.symgcp_nonsym_mttkrp_grad!(GU_nonsym, M_init, X, loss, 0; sym_data=true)
-        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, X, loss, multinomial_coefs, 0)
+        GCPLosses.symgcp_symmetric_grad!(GU_sym, M_init, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0)
 
         @test isapprox(GU_nonsym[1], auto_grad_U1, rtol=1e-6)
         @test isapprox(GU_nonsym[2], auto_grad_U2, rtol=1e-6)
@@ -259,7 +259,7 @@ end
         iN_starts, vec_idx_starts = TensorKernels.ttv_threading_plan(M_star.S, cell_sizes, nthreads, Val(N));
 
         # Compute gradients with different methods
-        GCPLosses.symgcp_symmetric_grad_multithread!(GU_sym, M_star, X, loss, multinomial_coefs, 0, nthreads, iN_starts, vec_idx_starts)
+        GCPLosses.symgcp_symmetric_grad_multithread!(GU_sym, M_star, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0, nthreads, iN_starts, vec_idx_starts)
 
         ref_U1 = zeros(eltype(M_star.U[1]), sz1, r)
         ref_U2 = zeros(eltype(M_star.U[2]), sz2, r)
@@ -288,7 +288,7 @@ end
         auto_grad_λ = auto_grad[(sz1+sz2)*r+1:end]
 
         # Compute gradients with different methods
-        GCPLosses.symgcp_symmetric_grad_multithread!(GU_sym, M_init, X, loss, multinomial_coefs, 0, nthreads, iN_starts, vec_idx_starts)
+        GCPLosses.symgcp_symmetric_grad_multithread!(GU_sym, M_init, GCPDecompositions.SymArray(X, S), loss, multinomial_coefs, 0, nthreads, iN_starts, vec_idx_starts)
 
         @test isapprox(GU_sym[1], auto_grad_U1, rtol=1e-6)
         @test isapprox(GU_sym[2], auto_grad_U2, rtol=1e-6)
@@ -710,7 +710,7 @@ end
         Random.seed!(0)
         M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
         X = [M[I] for I in CartesianIndices(size(M))]
-        Mh = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares()).M
+        Mh = symgcp(X, r, (1,2,3); loss = GCPLosses.LeastSquares())
         @test maximum(I -> abs(Mh[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
 
@@ -734,8 +734,8 @@ end
         Random.seed!(0)
         M = SymCPD(ones(r), (rand(sz[1],r), ), (1,1,1))
         X = [M[I] for I in CartesianIndices(size(M))]
-        Mh_nonsym = symgcp(X, r, (1,1,1); loss = GCPLosses.LeastSquares()).M
-        Mh_sym = symgcp(X, r, (1,1,1); loss = GCPLosses.LeastSquares(), sym_data=true).M
+        Mh_nonsym = symgcp(X, r, (1,1,1); loss = GCPLosses.LeastSquares())
+        Mh_sym = symgcp(X, r, (1,1,1); loss = GCPLosses.LeastSquares(), sym_data=true)
         @test maximum(I -> abs(Mh_nonsym[I] - X[I]), CartesianIndices(X)) <= 1e-5
         @test maximum(I -> abs(Mh_sym[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
@@ -744,8 +744,8 @@ end
         Random.seed!(0)
         M = SymCPD(ones(r), (rand(sz[1],r), rand(sz[3],r)), (1,1,2))
         X = [M[I] for I in CartesianIndices(size(M))]
-        Mh_nonsym = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares()).M
-        Mh_sym = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares(), sym_data=true).M
+        Mh_nonsym = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares())
+        Mh_sym = symgcp(X, r, (1,1,2); loss = GCPLosses.LeastSquares(), sym_data=true)
         @test maximum(I -> abs(Mh_nonsym[I] - X[I]), CartesianIndices(X)) <= 1e-5
         @test maximum(I -> abs(Mh_sym[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end
@@ -754,8 +754,8 @@ end
        Random.seed!(0)
         M = SymCPD(ones(r), rand.(sz, r), (1,2,3))
         X = [M[I] for I in CartesianIndices(size(M))]
-        Mh_nonsym = symgcp(X, r, (1,2,3); loss = GCPLosses.NonnegativeLeastSquares()).M
-        Mh_sym = symgcp(X, r, (1,2,3); loss = GCPLosses.NonnegativeLeastSquares(), sym_data=true).M
+        Mh_nonsym = symgcp(X, r, (1,2,3); loss = GCPLosses.NonnegativeLeastSquares())
+        Mh_sym = symgcp(X, r, (1,2,3); loss = GCPLosses.NonnegativeLeastSquares(), sym_data=true)
         @test maximum(I -> abs(Mh_nonsym[I] - X[I]), CartesianIndices(X)) <= 1e-5
         @test maximum(I -> abs(Mh_sym[I] - X[I]), CartesianIndices(X)) <= 1e-5
     end

@@ -7,12 +7,13 @@ module GCPDecompositions
 import Base: ndims, size, show, summary
 import Base: getindex
 import Base: AbstractArray, Array
-import Base.Cartesian: @nloops, @ntuple, @nexprs
+import Base.Cartesian: @nloops, @ntuple, @nexprs, @nref
 import LinearAlgebra: norm, Diagonal, mul!
 using IntervalSets: Interval
 using Random: default_rng
 using SparseArrays: spzeros
 using StaticArrays: MVector
+import Combinatorics
 
 # Exports
 export CPD
@@ -25,6 +26,7 @@ export symgcp
 
 include("cpd.jl")
 include("symcpd.jl")
+include("symarray.jl")
 include("tensor-kernels.jl")
 include("gcp-losses.jl")
 include("gcp-constraints.jl")

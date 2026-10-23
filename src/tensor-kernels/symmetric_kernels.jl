@@ -1,40 +1,4 @@
 """
-    symmetrize_tensor(X::Array{T,N}, S::NTuple{N,Int})
-
-Symmetrize the tensor X with respect to the symmetry defined by S.
-"""
-function symmetrize_tensor(
-    X::Array{T,N},
-    S::NTuple{N,Int}
-) where {T,N}
-    K = maximum(S)
-    groups = [findall(==(k), S) for k in 1:K]
-    cell_sizes = length.(groups)
-    
-    # Form all permutations of the modes within each cell
-    cell_perms = [collect(Combinatorics.permutations(g)) for g in groups]
-    all_perms = NTuple{N,Int}[]
-    for p in Iterators.product(cell_perms...)
-        push!(all_perms, Tuple(vcat(p...)))
-    end
-
-    X_sym = zeros(float(T), size(X))  #  Symmetric part of integer data may include floats, so need to promote
-    constant_factor = 1 / prod(factorial.(cell_sizes))
-
-    @inbounds for I in CartesianIndices(X)
-        I_tuple = Tuple(I)
-        acc = zero(T)
-        for perm in all_perms
-            I_perm = ntuple(i -> I_tuple[perm[i]], N)
-            acc += X[I_perm...]
-        end
-        X_sym[I] = constant_factor * acc
-    end
-
-    return X_sym
-end
-
-"""
     collect_multinomial_coefficients(S::NTuple{N,Int}, cell_sizes::NTuple{K,Int}, ::Val{N}) where {N,K}
 
 Collect the multinomial coefficient (number of repeated entries) for each
@@ -48,10 +12,9 @@ given by cell_sizes.
 ) where {N,K}
     quote
         coef_dtype = Float64
-        sz = 1
+        sz = _packed_length(S, cell_sizes)
         num = 1.0
         for k in 1:$K
-            sz *= binomial(cell_sizes[k] + count(S .== k) - 1, count(S .== k))
             num *= factorial(count(S .== k))
         end
         coefs = Vector{coef_dtype}(undef, sz)
@@ -87,13 +50,14 @@ given by cell_sizes.
 end
 
 """
-    fill_reduced_Y_vec!(Y_vec::AbstractVector, X::Array, M::SymCPD, loss, ::Val{N}, ::Val{R}) where {N,R}
+    fill_reduced_Y_vec!(Y_vec::AbstractVector, X::SymArray{TX,N,K}, M::SymCPD, loss, ::Val{N}, ::Val{R}) where {TX,N,K,R}
 
 Forms reduced vectorization of derivative tensor Y with only structually unique entries.
+The data `X` is read in its packed order, which matches the order of `Y_vec`.
 Computes partial products at loop level 2 for efficiency. May be able to get further improvements
     by saving partial products at all loop levels 2 through N.
 """
-@generated function fill_reduced_Y_vec!(Y_vec::AbstractVector, X::Array, M::SymCPD, loss, ::Val{N}, ::Val{R}) where {N,R}
+@generated function fill_reduced_Y_vec!(Y_vec::AbstractVector, X::SymArray{TX,N,K}, M::SymCPD, loss, ::Val{N}, ::Val{R}) where {TX,N,K,R}
     set_partial_m = map(1:R) do j
         terms = [:(M.U[M.S[$k]][$(Symbol("i_$(k)")), $j]) for k in 2:N]
         :(partial_prod[$j] = M.λ[$j] * *( $(terms...) ))
@@ -101,10 +65,12 @@ Computes partial products at loop level 2 for efficiency. May be able to get fur
     pre_body = Expr(:block, set_partial_m...)
 
     quote
+        _check_sym_data(X, M)
         S = M.S
         T = eltype(M.U[1])
         partial_prod = zeros(MVector{$R, T})
         mode1_factors = M.U[S[1]]
+        X_vals = X.vals
         vec_idx = 1
         @inbounds @nloops(
             $N,
@@ -112,7 +78,7 @@ Computes partial products at loop level 2 for efficiency. May be able to get fur
             k -> (k == $N ? 1 : S[k] == S[k+1] ? i_{k+1} : 1):size(M.U[S[k]], 1),
             d -> d == 2 ? $pre_body : nothing,
             begin
-                x = @nref $N X i
+                x = X_vals[vec_idx]
                 m = zero(T)
                 for col in 1:$R
                     m = muladd(mode1_factors[i_1, col], partial_prod[col], m)
@@ -126,28 +92,28 @@ end
 
 """
     columnwise_ttv_all_modes!(
-        result::Vector{TX},
-        y::Vector{TY}, 
-        Xs::NTuple{K,AbstractMatrix{TX}}, 
-        multinomial_coefs::Vector{TC}, 
+        result::Vector{TU},
+        y::SymArray{TY,N,K},
+        Us::NTuple{K,AbstractMatrix{TU}},
+        multinomial_coefs::Vector{TC},
         ::Val{S}, ::Val{N}, ::Val{R}
-    ) where {TY,K,TX,TC,S,N,R}
+    ) where {TY,N,K,TU,TC,S,R}
 
-Compute the TTV in all modes (i.e., the weights gradient) given the reduced vectorization of 
-    the derivative tensor y and factor matrices in Xs, using the coefficients in 
+Compute the TTV in all modes (i.e., the weights gradient) given the symmetric
+    derivative tensor y (read in its packed order) and factor matrices in Us, using the coefficients in
     multinomial_coefs, for general symmetry given by S, order N, and rank R.
 """
 @generated function columnwise_ttv_all_modes!(
-    result::AbstractVector{TX},
-    y::Vector{TY}, 
-    Xs::NTuple{K,AbstractMatrix{TX}}, 
+    result::AbstractVector{TU},
+    y::SymArray{TY,N,K},
+    Us::NTuple{K,AbstractMatrix{TU}},
     multinomial_coefs::Vector{TC},
     ::Val{S}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC,S,N,R}
+) where {TY,N,K,TU,TC,S,R}
 
     # Define functions for different symbols in expressions
     Iv(d) = Symbol(:i_, d);  Partial_Prod(d) = Symbol(:partial_prod_, d)
-    XM(d) = Symbol(:Xt_, S[d])        # transposed factor at loop position d
+    UM(d) = Symbol(:Ut_, S[d])        # transposed factor at loop position d
 
     pre_exprs  = [Any[] for _ in 1:N]
     post_exprs = [Any[] for _ in 1:N]
@@ -155,13 +121,13 @@ Compute the TTV in all modes (i.e., the weights gradient) given the reduced vect
     # Add pre-expression at each level for partial products
     for d in 2:N
         push!(pre_exprs[d], :(for col in 1:$R
-            $(Partial_Prod(d))[col] = $(d == N ? :($(XM(d))[col, $(Iv(d))]) :
-                              :($(XM(d))[col, $(Iv(d))] * $(Partial_Prod(d+1))[col]))
+            $(Partial_Prod(d))[col] = $(d == N ? :($(UM(d))[col, $(Iv(d))]) :
+                              :($(UM(d))[col, $(Iv(d))] * $(Partial_Prod(d+1))[col]))
         end))
     end
     
     # Add pre/post expressions for zeroing/flushing the accumulator
-    push!(pre_exprs[2],  :(fill!(acc, zero($TX))))
+    push!(pre_exprs[2],  :(fill!(acc, zero($TU))))
     push!(post_exprs[2], :(for col in 1:$R
                                result[col] = muladd(acc[col], partial_prod_2[col], result[col])
                            end))
@@ -171,25 +137,27 @@ Compute the TTV in all modes (i.e., the weights gradient) given the reduced vect
                  1:N; init = :nothing)))
     pre, post = chain(pre_exprs), chain(post_exprs)
 
-    alloc = Expr(:block, (:($(Partial_Prod(d)) = zeros(MVector{$R, $TX})) for d in 2:N)...)
+    alloc = Expr(:block, (:($(Partial_Prod(d)) = zeros(MVector{$R, $TU})) for d in 2:N)...)
     
     quote
+        _check_sym_factors(y, Us, $S)
         Sv = $(S)
-        acc = zeros(MVector{$R, TX})
-        @nexprs $K k -> (Xt_k = permutedims(Xs[k]))
-        Xfirst = $(XM(1))
+        acc = zeros(MVector{$R, TU})
+        @nexprs $K k -> (Ut_k = permutedims(Us[k]))
+        Ufirst = $(UM(1))
         $alloc
+        y_vals = y.vals
         vec_idx = 1
         @inbounds @nloops(
             $N,
             i,
-            k -> (k == $N ? 1 : Sv[k] == Sv[k+1] ? i_{k+1} : 1):size(Xs[Sv[k]], 1),
+            k -> (k == $N ? 1 : Sv[k] == Sv[k+1] ? i_{k+1} : 1):size(Us[Sv[k]], 1),
             $pre,
             $post,
             begin
-                tensor_term = multinomial_coefs[vec_idx] * y[vec_idx]
+                tensor_term = multinomial_coefs[vec_idx] * y_vals[vec_idx]
                 for col in 1:$R
-                    acc[col] = muladd(tensor_term, Xfirst[col, i_1], acc[col])  # Note the product of terms from modes 2-N is factored out into post-expr for i_2
+                    acc[col] = muladd(tensor_term, Ufirst[col, i_1], acc[col])  # Note the product of terms from modes 2-N is factored out into post-expr for i_2
                 end
                 vec_idx += 1
             end
@@ -201,27 +169,27 @@ end
 """
     columnwise_ttv_all_modes_except_one!(
         result::AbstractMatrix,
-        y::Vector{TY}, 
-        Xs::NTuple{K,AbstractMatrix{TX}}, 
-        multinomial_coefs::Vector{TC}, 
+        y::SymArray{TY,N,K},
+        Us::NTuple{K,AbstractMatrix{TU}},
+        multinomial_coefs::Vector{TC},
         ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
-    ) where {TY,K,TX,TC,S,c,N,R}
+    ) where {TY,N,K,TU,TC,S,c,R}
 
-Compute the TTSV in all modes except the first one corresponding to cell c, i.e., 
-    the gradient for the factors for cell c minus scaling by diag(λ), 
-    given the reduced vectorization of the derivative tensor y 
-    and the factor matrices in Xs, with pre-computed multinomial coefficients.
+Compute the TTSV in all modes except the first one corresponding to cell c, i.e.,
+    the gradient for the factors for cell c minus scaling by diag(λ),
+    given the symmetric derivative tensor y (read in its packed order)
+    and the factor matrices in Us, with pre-computed multinomial coefficients.
 result should be dimensions R x n, where R is the rank and n is the mode size for cell c.
-This function currently does a permutedims on the factor matrices in Xs, but
+This function currently does a permutedims on the factor matrices in Us, but
     it would be better if there was an option to store the factor matrices transposed from the start.
 """
 @generated function columnwise_ttv_all_modes_except_one!(
     result::AbstractMatrix,
-    y::Vector{TY}, 
-    Xs::NTuple{K,AbstractMatrix{TX}}, 
-    multinomial_coefs::Vector{TC}, 
+    y::SymArray{TY,N,K},
+    Us::NTuple{K,AbstractMatrix{TU}},
+    multinomial_coefs::Vector{TC},
     ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC,S,c,N,R}
+) where {TY,N,K,TU,TC,S,c,R}
 
     num_modes_cell = count(==(c), S)
     mode = findfirst(==(c), S)
@@ -229,13 +197,13 @@ This function currently does a permutedims on the factor matrices in Xs, but
     acc_modes = [j + mode - 1 for j in 1:num_modes_cell if j + mode - 1 >= 2]
 
     need_pref = last_mode_cell >= 3  # Flag whether we can save multiplies by computing prefix products
-    x_needed  = sort!(unique!([collect(2:last_mode_cell-1); collect(mode+1:N)])) # Included X in prefix/suffix products, excluding mode 1
+    x_needed  = sort!(unique!([collect(2:last_mode_cell-1); collect(mode+1:N)])) # Included U in prefix/suffix products, excluding mode 1
     peel = (mode == 1 && num_modes_cell >= 2)  # Flag whether to peel first i_1 iteration
     
     # Define functions for different symbols in expressions
     Iv(d)=Symbol(:i_,d);  Pv(d)=Symbol(:p_,d);   Av(d)=Symbol(:acc_,d)
     Xv(d)=Symbol(:x_,d);  SUF(d)=Symbol(:suf_,d); SP(d)=Symbol(:sp_,d)
-    XM(d)=Symbol(:X_, S[d])  # transposed factor matrix at loop position d, defined in quote
+    UM(d)=Symbol(:U_, S[d])  # transposed factor matrix at loop position d, defined in quote
     IDiff(d)=Symbol(:idiff_,d) # tracks whether i_d == i_{d+1}, hoisted to level d to reduce branching in innermost loop
     col_assign_loop(lhs, rhs) = :(for col in 1:$R; $lhs = $rhs; end)
 
@@ -251,9 +219,9 @@ This function currently does a permutedims on the factor matrices in Xs, but
     
     # Add pre- and post-expressions for each level
     for d in 1:N
-        # Load row i_d of matrix X[S[d]] into x_d (pre)
+        # Load row i_d of matrix U[S[d]] into x_d (pre)
         d in x_needed && push!(pre_exprs[d],
-            col_assign_loop(:($(Xv(d))[col]), :($(XM(d))[col, $(Iv(d))])))
+            col_assign_loop(:($(Xv(d))[col]), :($(UM(d))[col, $(Iv(d))])))
 
         # Compute suffix product x_d * ... * x_N (pre) if it will be used
         if d > mode
@@ -274,14 +242,14 @@ This function currently does a permutedims on the factor matrices in Xs, but
         # For d >= mode + 1, i_d == i_{d-1}, we assign zeros to sp_d. This prevents us from having to 
         # do branching in the innermost loop, at a minimal cost of added computation from adding zeros.
         if d == 2
-            need_pref && push!(pre_exprs[2], :(fill!(pref, one($TX))))
+            need_pref && push!(pre_exprs[2], :(fill!(pref, one($TU))))
             for D in 2:last_mode_cell
                 if D >= mode
                     fac = Any[Pv(D)]
                     D > 2 && push!(fac, :(pref[col]))
                     D < N && push!(fac, :($(SUF(D+1))[col]))
                     prod_ex = length(fac) == 1 ? only(fac) : Expr(:call, :*, fac...)
-                    rhs = D in max(mode,2)+1:last_mode_cell ? :(ifelse($(IDiff(D)), $prod_ex, zero($TX))) : prod_ex
+                    rhs = D in max(mode,2)+1:last_mode_cell ? :(ifelse($(IDiff(D)), $prod_ex, zero($TU))) : prod_ex
                     push!(pre_exprs[2], col_assign_loop(:($(SP(D))[col]), rhs))
                     # push!(pre_exprs[2], col_assign_loop(:($(SP(D))[col]),
                     #     length(fac) == 1 ? only(fac) : Expr(:call, :*, fac...)))
@@ -293,10 +261,10 @@ This function currently does a permutedims on the factor matrices in Xs, but
 
         # Zero (pre) and flush (post) accumulators
         if d in acc_modes
-            # !(peel && d == 2) && push!(pre_exprs[d], :(fill!($(Av(d)), zero($TX)))) # If peel && d == 2 we directly overwrite acc_2
+            # !(peel && d == 2) && push!(pre_exprs[d], :(fill!($(Av(d)), zero($TU)))) # If peel && d == 2 we directly overwrite acc_2
             # The fill in the above line causes major slowdowns for odd R, the below is better.
             !(peel && d == 2) && push!(pre_exprs[d], :(for col in 1:$R
-                                    $(Av(d))[col] = zero($TX)
+                                    $(Av(d))[col] = zero($TU)
                                 end))    # If peel && d == 2 we directly overwrite acc_2
             push!(post_exprs[d], :(for col in 1:$R
                                     result[col, $(Iv(d))] += $(Av(d))[col]
@@ -307,7 +275,7 @@ This function currently does a permutedims on the factor matrices in Xs, but
     # Peel off first iteration of i_1 loop (i.e., i_1 = i_2) when mode == 1 and num_modes_cell >= 2 to reduce branching
     # and coefficient computation logic (pre).
     if peel
-        push!(pre_exprs[2], :(yw = multinomial_coefs[vec_idx] * y[vec_idx]))
+        push!(pre_exprs[2], :(yw = multinomial_coefs[vec_idx] * y_vals[vec_idx]))
         push!(pre_exprs[2], :(tt = (p_2 + 1) * yw))
         push!(pre_exprs[2], col_assign_loop(:(acc_2[col]), :(tt * suf_2[col])))
         if last_mode_cell >= 3
@@ -328,12 +296,12 @@ This function currently does a permutedims on the factor matrices in Xs, but
 
     # Expressions for allocations
     alloc = Expr(:block)
-    for d in x_needed;  push!(alloc.args, :($(Xv(d))  = zeros(MVector{$R, $TX}))) end
-    for d in mode+1:N;  push!(alloc.args, :($(SUF(d)) = zeros(MVector{$R, $TX}))) end
-    for D in acc_modes; push!(alloc.args, :($(Av(D))  = zeros(MVector{$R, $TX}))) end
-    for D in acc_modes; push!(alloc.args, :($(SP(D))  = zeros(MVector{$R, $TX}))) end
-    need_pref           && push!(alloc.args, :(pref = zeros(MVector{$R, $TX})))
-    !isempty(acc_modes) && push!(alloc.args, :(yx1  = zeros(MVector{$R, $TX})))
+    for d in x_needed;  push!(alloc.args, :($(Xv(d))  = zeros(MVector{$R, $TU}))) end
+    for d in mode+1:N;  push!(alloc.args, :($(SUF(d)) = zeros(MVector{$R, $TU}))) end
+    for D in acc_modes; push!(alloc.args, :($(Av(D))  = zeros(MVector{$R, $TU}))) end
+    for D in acc_modes; push!(alloc.args, :($(SP(D))  = zeros(MVector{$R, $TU}))) end
+    need_pref           && push!(alloc.args, :(pref = zeros(MVector{$R, $TU})))
+    !isempty(acc_modes) && push!(alloc.args, :(yx1  = zeros(MVector{$R, $TU})))
 
     # Expressions for loop body
     # Compute value of p_1*yw if mode != 1
@@ -344,25 +312,27 @@ This function currently does a permutedims on the factor matrices in Xs, but
 
     yx1_def = isempty(acc_modes)  ? :nothing :
               :(for col in 1:$R
-                    yx1[col] = yw * Xfirst[col, i_1]
+                    yx1[col] = yw * Ufirst[col, i_1]
                 end)
 
     quote
+        _check_sym_factors(y, Us, $S)
         Sv = $(S)
-        @nexprs $K k -> (X_k = permutedims(Xs[k]))
-        Xfirst = $(Symbol(:X_, S[1]))
+        @nexprs $K k -> (U_k = permutedims(Us[k]))
+        Ufirst = $(Symbol(:U_, S[1]))
         $alloc
+        y_vals = y.vals
         vec_idx = 1
         @inbounds @nloops(
             $N, 
             i, 
             k -> (k == $N ? 1 :
                     k == 1 ? $(peel ? :(i_2 + 1) : (S[1] == S[2] ? :(i_2) : 1)) :
-                    Sv[k] == Sv[k+1] ? i_{k+1} : 1):size(Xs[Sv[k]], 1),
+                    Sv[k] == Sv[k+1] ? i_{k+1} : 1):size(Us[Sv[k]], 1),
             $pre, 
             $post, 
             begin   # Body expr
-                yw = multinomial_coefs[vec_idx] * y[vec_idx]
+                yw = multinomial_coefs[vec_idx] * y_vals[vec_idx]
                 $tt1_def
                 $yx1_def
                 @nexprs $num_modes_cell j -> begin
@@ -393,10 +363,7 @@ end
     ::Val{N}
 ) where {N,K}
     quote
-        total_sz = 1
-        for k in 1:$K
-            total_sz *= binomial(cell_sizes[k] + count(S .== k) - 1, count(S .== k))
-        end 
+        total_sz = _packed_length(S, cell_sizes)
         chunk_iters = div(total_sz, num_threads)
         iN_starts = [1]
         vec_idx_starts = [1]
@@ -426,12 +393,13 @@ end
 
 function fill_reduced_Y_vec_multithreaded!(
     Y_vec::AbstractVector, 
-    X::Array{TX,N}, M::SymCPD, 
+    X::SymArray{TX,N,K}, M::SymCPD,
     loss,
     iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
     num_threads::Int,
-) where {TX,N}
-    
+) where {TX,N,K}
+    _check_sym_data(X, M)
+
     nchunks = min(num_threads, length(iN_starts)) 
     
     Threads.@threads for t in 1:nchunks
@@ -445,12 +413,12 @@ function fill_reduced_Y_vec_multithreaded!(
 end
 
 @generated function _fill_reduced_Y_vec_multithreaded_chunk!(
-    partial_Y_vec::AbstractVector, 
-    X::Array, M::SymCPD, 
-    loss, 
+    partial_Y_vec::AbstractVector,
+    X::SymArray{TX,N,K}, M::SymCPD,
+    loss,
     iN_lo::Int, iN_hi::Int, vec_idx_start::Int,
     ::Val{N}, ::Val{R}
-) where {N,R}
+) where {TX,N,K,R}
     set_partial_m = map(1:R) do j
         terms = [:(M.U[M.S[$k]][$(Symbol("i_$(k)")), $j]) for k in 2:N]
         :(partial_prod[$j] = M.λ[$j] * *( $(terms...) ))
@@ -462,6 +430,7 @@ end
         T = eltype(M.U[1])
         partial_prod = zeros(MVector{$R, T})
         mode1_factors = M.U[S[1]]
+        X_vals = X.vals
         vec_idx = vec_idx_start
         @inbounds @nloops(
             $N,
@@ -469,7 +438,7 @@ end
             k -> (k == $N ? iN_lo : S[k] == S[k+1] ? i_{k+1} : 1):(k == $N ? iN_hi : size(M.U[S[k]], 1)),
             d -> d == 2 ? $pre_body : nothing,
             begin
-                x = @nref $N X i
+                x = X_vals[vec_idx]
                 m = zero(T)
                 for col in 1:$R
                     m = muladd(mode1_factors[i_1, col], partial_prod[col], m)
@@ -483,23 +452,24 @@ end
 
 function columnwise_ttv_all_modes_multithread!(
     result::AbstractVector,
-    y::Vector{TY}, Xs::NTuple{K,AbstractMatrix{TX}}, 
+    y::SymArray{TY,N,K}, Us::NTuple{K,AbstractMatrix{TU}},
     multinomial_coefs::Vector{TC},
     iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
     num_threads::Int,
     ::Val{S}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC,S,N,R}
+) where {TY,N,K,TU,TC,S,R}
+    _check_sym_factors(y, Us, S)
 
     nchunks = min(num_threads, length(iN_starts)) 
 
-    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
-    partial_results = [t == 1 ? result : zeros(TX, R) for t in 1:nchunks]
+    UsT  = ntuple(k -> permutedims(Us[k]), Val(K))
+    partial_results = [t == 1 ? result : zeros(TU, R) for t in 1:nchunks]
 
     Threads.@threads for t in 1:nchunks
         lo = iN_starts[t]
-        hi = t == nchunks ? size(XsT[K], 2) : iN_starts[t+1] - 1
+        hi = t == nchunks ? size(UsT[K], 2) : iN_starts[t+1] - 1
         v0 = vec_idx_starts[t]
-        _columnwise_ttv_all_modes_chunk!(partial_results[t], y, XsT, multinomial_coefs, lo, hi, v0,
+        _columnwise_ttv_all_modes_chunk!(partial_results[t], y, UsT, multinomial_coefs, lo, hi, v0,
                     Val(S), Val(N), Val(R))
     end
     for t in 2:nchunks
@@ -511,17 +481,17 @@ function columnwise_ttv_all_modes_multithread!(
 end
 
 @generated function _columnwise_ttv_all_modes_chunk!(
-    result::AbstractVector{TX},
-    y::Vector{TY}, 
-    Xs_T::NTuple{K,AbstractMatrix{TX}}, 
+    result::AbstractVector{TU},
+    y::SymArray{TY,N,K},
+    Us_T::NTuple{K,AbstractMatrix{TU}},
     multinomial_coefs::Vector{TC},
     iN_lo::Int, iN_hi::Int, vec_idx_start::Int,
     ::Val{S}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC,S,N,R}
+) where {TY,N,K,TU,TC,S,R}
 
     # Define functions for different symbols in expressions
     Iv(d) = Symbol(:i_, d);  Partial_Prod(d) = Symbol(:partial_prod_, d)
-    XM(d) = Symbol(:Xt_, S[d])        # transposed factor at loop position d
+    UM(d) = Symbol(:Ut_, S[d])        # transposed factor at loop position d
 
     pre_exprs  = [Any[] for _ in 1:N]
     post_exprs = [Any[] for _ in 1:N]
@@ -529,13 +499,13 @@ end
     # Add pre-expression at each level for partial products
     for d in 2:N
         push!(pre_exprs[d], :(for col in 1:$R
-            $(Partial_Prod(d))[col] = $(d == N ? :($(XM(d))[col, $(Iv(d))]) :
-                              :($(XM(d))[col, $(Iv(d))] * $(Partial_Prod(d+1))[col]))
+            $(Partial_Prod(d))[col] = $(d == N ? :($(UM(d))[col, $(Iv(d))]) :
+                              :($(UM(d))[col, $(Iv(d))] * $(Partial_Prod(d+1))[col]))
         end))
     end
     
     # Add pre/post expressions for zeroing/flushing the accumulator
-    push!(pre_exprs[2],  :(fill!(acc, zero($TX))))
+    push!(pre_exprs[2],  :(fill!(acc, zero($TU))))
     push!(post_exprs[2], :(for col in 1:$R
                                result[col] = muladd(acc[col], partial_prod_2[col], result[col])
                            end))
@@ -545,25 +515,26 @@ end
                  1:N; init = :nothing)))
     pre, post = chain(pre_exprs), chain(post_exprs)
 
-    alloc = Expr(:block, (:($(Partial_Prod(d)) = zeros(MVector{$R, $TX})) for d in 2:N)...)
+    alloc = Expr(:block, (:($(Partial_Prod(d)) = zeros(MVector{$R, $TU})) for d in 2:N)...)
     
     quote
         Sv = $(S)
-        acc = zeros(MVector{$R, TX})
-        @nexprs $K k -> (Xt_k = Xs_T[k])
-        Xfirst = $(XM(1))
+        acc = zeros(MVector{$R, TU})
+        @nexprs $K k -> (Ut_k = Us_T[k])
+        Ufirst = $(UM(1))
         $alloc
+        y_vals = y.vals
         vec_idx = vec_idx_start
         @inbounds @nloops(
             $N,
             i,
-            k -> (k == $N ? iN_lo : Sv[k] == Sv[k+1] ? i_{k+1} : 1):(k == $N ? iN_hi : size(Xs_T[Sv[k]], 2)),
+            k -> (k == $N ? iN_lo : Sv[k] == Sv[k+1] ? i_{k+1} : 1):(k == $N ? iN_hi : size(Us_T[Sv[k]], 2)),
             $pre,
             $post,
             begin
-                tensor_term = multinomial_coefs[vec_idx] * y[vec_idx]
+                tensor_term = multinomial_coefs[vec_idx] * y_vals[vec_idx]
                 for col in 1:$R
-                    acc[col] = muladd(tensor_term, Xfirst[col, i_1], acc[col])  # Note the product of terms from modes 2-N is factored out into post-expr for i_2
+                    acc[col] = muladd(tensor_term, Ufirst[col, i_1], acc[col])  # Note the product of terms from modes 2-N is factored out into post-expr for i_2
                 end
                 vec_idx += 1
             end
@@ -574,23 +545,24 @@ end
 
 function columnwise_ttv_all_modes_except_one_multithread!(
     result::AbstractMatrix,
-    y::Vector{TY}, Xs::NTuple{K,AbstractMatrix{TX}}, 
+    y::SymArray{TY,N,K}, Us::NTuple{K,AbstractMatrix{TU}},
     multinomial_coefs::Vector{TC},
     iN_starts::Vector{Int}, vec_idx_starts::Vector{Int},
     num_threads::Int,
     ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC, S,c,N,R}
+) where {TY,N,K,TU,TC,S,c,R}
+    _check_sym_factors(y, Us, S)
 
     nchunks = min(num_threads, length(iN_starts))
 
-    XsT  = ntuple(k -> permutedims(Xs[k]), Val(K))
-    partial_results = [t == 1 ? result : zeros(TX, R, size(result,2)) for t in 1:nchunks]
+    UsT  = ntuple(k -> permutedims(Us[k]), Val(K))
+    partial_results = [t == 1 ? result : zeros(TU, R, size(result,2)) for t in 1:nchunks]
 
     Threads.@threads for t in 1:nchunks
         lo = iN_starts[t]
-        hi = t == nchunks ? size(XsT[K], 2) : iN_starts[t+1] - 1
+        hi = t == nchunks ? size(UsT[K], 2) : iN_starts[t+1] - 1
         v0 = vec_idx_starts[t]
-        _columnwise_ttv_all_modes_except_one_chunk!(partial_results[t], y, XsT, multinomial_coefs, lo, hi, v0,
+        _columnwise_ttv_all_modes_except_one_chunk!(partial_results[t], y, UsT, multinomial_coefs, lo, hi, v0,
                     Val(S), Val(c), Val(N), Val(R))
     end
     for t in 2:nchunks
@@ -606,12 +578,12 @@ end
 # for multithreading across outer loop.
 @generated function _columnwise_ttv_all_modes_except_one_chunk!(
     result::AbstractMatrix,
-    y::Vector{TY}, 
-    Xs_T::NTuple{K,AbstractMatrix{TX}}, 
-    multinomial_coefs::Vector{TC}, 
+    y::SymArray{TY,N,K},
+    Us_T::NTuple{K,AbstractMatrix{TU}},
+    multinomial_coefs::Vector{TC},
     iN_lo::Int, iN_hi::Int, vec_idx_start::Int,
     ::Val{S}, ::Val{c}, ::Val{N}, ::Val{R}
-) where {TY,K,TX,TC,S,c,N,R}
+) where {TY,N,K,TU,TC,S,c,R}
 
     num_modes_cell = count(==(c), S)
     mode = findfirst(==(c), S)
@@ -619,13 +591,13 @@ end
     acc_modes = [j + mode - 1 for j in 1:num_modes_cell if j + mode - 1 >= 2]
 
     need_pref = last_mode_cell >= 3  # Flag whether we can save multiplies by computing prefix products
-    x_needed  = sort!(unique!([collect(2:last_mode_cell-1); collect(mode+1:N)])) # Included X in prefix/suffix products, excluding mode 1
+    x_needed  = sort!(unique!([collect(2:last_mode_cell-1); collect(mode+1:N)])) # Included U in prefix/suffix products, excluding mode 1
     peel = (mode == 1 && num_modes_cell >= 2)  # Flag whether to peel first i_1 iteration
     
     # Define functions for different symbols in expressions
     Iv(d)=Symbol(:i_,d);  Pv(d)=Symbol(:p_,d);   Av(d)=Symbol(:acc_,d)
     Xv(d)=Symbol(:x_,d);  SUF(d)=Symbol(:suf_,d); SP(d)=Symbol(:sp_,d)
-    XM(d)=Symbol(:X_, S[d])  # transposed factor matrix at loop position d, defined in quote
+    UM(d)=Symbol(:U_, S[d])  # transposed factor matrix at loop position d, defined in quote
     IDiff(d)=Symbol(:idiff_,d) # tracks whether i_d == i_{d+1}, hoisted to level d to reduce branching in innermost loop
     col_assign_loop(lhs, rhs) = :(for col in 1:$R; $lhs = $rhs; end)
 
@@ -641,9 +613,9 @@ end
     
     # Add pre- and post-expressions for each level
     for d in 1:N
-        # Load row i_d of matrix X[S[d]] into x_d (pre)
+        # Load row i_d of matrix U[S[d]] into x_d (pre)
         d in x_needed && push!(pre_exprs[d],
-            col_assign_loop(:($(Xv(d))[col]), :($(XM(d))[col, $(Iv(d))])))
+            col_assign_loop(:($(Xv(d))[col]), :($(UM(d))[col, $(Iv(d))])))
 
         # Compute suffix product x_d * ... * x_N (pre) if it will be used
         if d > mode
@@ -664,14 +636,14 @@ end
         # For d >= mode + 1, i_d == i_{d-1}, we assign zeros to sp_d. This prevents us from having to 
         # do branching in the innermost loop, at a minimal cost of added computation from adding zeros.
         if d == 2
-            need_pref && push!(pre_exprs[2], :(fill!(pref, one($TX))))
+            need_pref && push!(pre_exprs[2], :(fill!(pref, one($TU))))
             for D in 2:last_mode_cell
                 if D >= mode
                     fac = Any[Pv(D)]
                     D > 2 && push!(fac, :(pref[col]))
                     D < N && push!(fac, :($(SUF(D+1))[col]))
                     prod_ex = length(fac) == 1 ? only(fac) : Expr(:call, :*, fac...)
-                    rhs = D in max(mode,2)+1:last_mode_cell ? :(ifelse($(IDiff(D)), $prod_ex, zero($TX))) : prod_ex
+                    rhs = D in max(mode,2)+1:last_mode_cell ? :(ifelse($(IDiff(D)), $prod_ex, zero($TU))) : prod_ex
                     push!(pre_exprs[2], col_assign_loop(:($(SP(D))[col]), rhs))
                     # push!(pre_exprs[2], col_assign_loop(:($(SP(D))[col]),
                     #     length(fac) == 1 ? only(fac) : Expr(:call, :*, fac...)))
@@ -683,10 +655,10 @@ end
 
         # Zero (pre) and flush (post) accumulators
         if d in acc_modes
-            # !(peel && d == 2) && push!(pre_exprs[d], :(fill!($(Av(d)), zero($TX)))) # If peel && d == 2 we directly overwrite acc_2
+            # !(peel && d == 2) && push!(pre_exprs[d], :(fill!($(Av(d)), zero($TU)))) # If peel && d == 2 we directly overwrite acc_2
             # The fill in the above line causes major slowdowns for odd R, the below is better.
             !(peel && d == 2) && push!(pre_exprs[d], :(for col in 1:$R
-                                    $(Av(d))[col] = zero($TX)
+                                    $(Av(d))[col] = zero($TU)
                                 end))    # If peel && d == 2 we directly overwrite acc_2
             push!(post_exprs[d], :(for col in 1:$R
                                     result[col, $(Iv(d))] += $(Av(d))[col]
@@ -697,7 +669,7 @@ end
     # Peel off first iteration of i_1 loop (i.e., i_1 = i_2) when mode == 1 and num_modes_cell >= 2 to reduce branching
     # and coefficient computation logic (pre).
     if peel
-        push!(pre_exprs[2], :(yw = multinomial_coefs[vec_idx] * y[vec_idx]))
+        push!(pre_exprs[2], :(yw = multinomial_coefs[vec_idx] * y_vals[vec_idx]))
         push!(pre_exprs[2], :(tt = (p_2 + 1) * yw))
         push!(pre_exprs[2], col_assign_loop(:(acc_2[col]), :(tt * suf_2[col])))
         if last_mode_cell >= 3
@@ -718,12 +690,12 @@ end
 
     # Expressions for allocations
     alloc = Expr(:block)
-    for d in x_needed;  push!(alloc.args, :($(Xv(d))  = zeros(MVector{$R, $TX}))) end
-    for d in mode+1:N;  push!(alloc.args, :($(SUF(d)) = zeros(MVector{$R, $TX}))) end
-    for D in acc_modes; push!(alloc.args, :($(Av(D))  = zeros(MVector{$R, $TX}))) end
-    for D in acc_modes; push!(alloc.args, :($(SP(D))  = zeros(MVector{$R, $TX}))) end
-    need_pref           && push!(alloc.args, :(pref = zeros(MVector{$R, $TX})))
-    !isempty(acc_modes) && push!(alloc.args, :(yx1  = zeros(MVector{$R, $TX})))
+    for d in x_needed;  push!(alloc.args, :($(Xv(d))  = zeros(MVector{$R, $TU}))) end
+    for d in mode+1:N;  push!(alloc.args, :($(SUF(d)) = zeros(MVector{$R, $TU}))) end
+    for D in acc_modes; push!(alloc.args, :($(Av(D))  = zeros(MVector{$R, $TU}))) end
+    for D in acc_modes; push!(alloc.args, :($(SP(D))  = zeros(MVector{$R, $TU}))) end
+    need_pref           && push!(alloc.args, :(pref = zeros(MVector{$R, $TU})))
+    !isempty(acc_modes) && push!(alloc.args, :(yx1  = zeros(MVector{$R, $TU})))
 
     # Expressions for loop body
     # Compute value of p_1*yw if mode != 1
@@ -734,15 +706,16 @@ end
 
     yx1_def = isempty(acc_modes)  ? :nothing :
               :(for col in 1:$R
-                    yx1[col] = yw * Xfirst[col, i_1]
+                    yx1[col] = yw * Ufirst[col, i_1]
                 end)
 
     quote
         Sv = $(S)
-        #@nexprs $K k -> (X_k = permutedims(Xs[k])) - permutedims in calling function instead
-        @nexprs $K k -> (X_k = Xs_T[k])
-        Xfirst = $(Symbol(:X_, S[1]))
+        #@nexprs $K k -> (U_k = permutedims(Us[k])) - permutedims in calling function instead
+        @nexprs $K k -> (U_k = Us_T[k])
+        Ufirst = $(Symbol(:U_, S[1]))
         $alloc
+        y_vals = y.vals
         vec_idx = vec_idx_start
         @inbounds @nloops(
             $N, 
@@ -750,11 +723,11 @@ end
             k -> (k == $N ? iN_lo :
                     k == 1 ? $(peel ? :(i_2 + 1) : (S[1] == S[2] ? :(i_2) : 1)) :
                     Sv[k] == Sv[k+1] ? i_{k+1} : 1) :
-                    (k == $N ? iN_hi : size(Xs_T[Sv[k]], 2)),
+                    (k == $N ? iN_hi : size(Us_T[Sv[k]], 2)),
             $pre, 
             $post, 
             begin   # Body expr
-                yw = multinomial_coefs[vec_idx] * y[vec_idx]
+                yw = multinomial_coefs[vec_idx] * y_vals[vec_idx]
                 $tt1_def
                 $yx1_def
                 @nexprs $num_modes_cell j -> begin

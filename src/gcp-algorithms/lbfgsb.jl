@@ -148,8 +148,8 @@ function _symgcp(
     # Begin timing
     t0 = time_ns()
 
-    # Symmetrize data if selected
-    Xsym = !sym_data && symmetrize_data ? symmetrize_tensor(X, S) : sym_data ? X : nothing
+    # Store symmetric (or symmetrized, if selected) data in packed form
+    Xsym = sym_data ? SymArray(X, S) : symmetrize_data ? symmetrize_tensor(X, S) : nothing
 
     # Initialization
     M0 = deepcopy(init)

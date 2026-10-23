@@ -8,7 +8,8 @@ module GCPAlgorithms
 using ..GCPDecompositions
 using ..TensorKernels: create_mttkrp_buffer, mttkrp!
 using ..TensorKernels: khatrirao!, khatrirao
-using ..TensorKernels: symmetrize_tensor, collect_multinomial_coefficients, ttv_threading_plan
+using ..GCPDecompositions: SymArray, symmetrize_tensor
+using ..TensorKernels: collect_multinomial_coefficients, ttv_threading_plan
 using IntervalSets: Interval
 using LinearAlgebra: lu!, mul!, norm, rdiv!
 using LBFGSB: lbfgsb, L_BFGS_B

@@ -6,6 +6,7 @@ Loss functions for Generalized CP Decomposition.
 module GCPLosses
 
 using ..GCPDecompositions
+using ..GCPDecompositions: _packed_length, SymArray, _check_sym_data
 using ..TensorKernels: mttkrps!, mttkrp, mttkrp!, sparse_mttkrp!, sparse_mttkrps!, checksym, khatrirao
 using ..TensorKernels: fill_reduced_Y_vec!, columnwise_ttv_all_modes!, columnwise_ttv_all_modes_except_one!
 using ..TensorKernels: fill_reduced_Y_vec_multithreaded!, columnwise_ttv_all_modes_multithread!, columnwise_ttv_all_modes_except_one_multithread!
@@ -117,15 +118,15 @@ nonsymmetric data tensor `X`, and loss function `loss`, with regularization para
 end
 
 """
-    objective_symdata(M::SymCPD{T,N,K}, X::Array{TX,N}, loss, γ, multinomial_coefs, ::Val{R}) where {T,N,K,TX,R}
+    objective_symdata(M::SymCPD{T,N,K}, X::SymArray{TX,N,K}, loss, γ, multinomial_coefs, ::Val{R}) where {T,N,K,TX,R}
 
-Compute the symmetric GCP objective function for the symmetric model tensor `M`, 
-symmetric data tensor `X`, and loss function `loss`,
+Compute the symmetric GCP objective function for the symmetric model tensor `M`,
+symmetric data tensor `X` (read in its packed order), and loss function `loss`,
 using multinomial_coefs to rescale individual terms, with regularization parameter γ.
 """
 @generated function objective_symdata(
-    M::SymCPD{TM,N,K}, 
-    X::Array{TX,N}, 
+    M::SymCPD{TM,N,K},
+    X::SymArray{TX,N,K},
     loss, γ,
     multinomial_coefs,
     ::Val{R}
@@ -137,10 +138,12 @@ using multinomial_coefs to rescale individual terms, with regularization paramet
     pre_body = Expr(:block, set_partial_m...)
 
     quote
+        _check_sym_data(X, M)
         S = M.S
         partial_prod = zeros(MVector{$R, TM})
         mode1_factors = M.U[M.S[1]]
         f = zero(promote_type(TM, TX))
+        X_vals = X.vals
         vec_idx = 1
         @inbounds @nloops(
             $N,
@@ -148,7 +151,7 @@ using multinomial_coefs to rescale individual terms, with regularization paramet
             k -> (k == $N ? 1 : S[k] == S[k+1] ? i_{k+1} : 1):size(M.U[S[k]], 1),
             d -> d == 2 ? $pre_body : nothing,
             begin
-                x = @nref $N X i
+                x = X_vals[vec_idx]
                 m = zero(TM)
                 for col in 1:$R
                     m = muladd(mode1_factors[i_1, col], partial_prod[col], m)
@@ -254,9 +257,9 @@ function symgcp_nonsym_mttkrp_grad!(
 end
 
 function symgcp_symmetric_grad!(
-	GU_λ::NTuple{V, AbstractArray}, 
+	GU_λ::NTuple{V, AbstractArray},
 	M::SymCPD{TM,N,K},
-    X::Array{TX,N}, 
+    X::SymArray{TX,N,K},
 	loss,
 	multinomial_coefs::AbstractVector,
     γ;
@@ -264,16 +267,16 @@ function symgcp_symmetric_grad!(
 ) where {V,TM,TX,N,K}
 	
 	# Fill reduced derivative tensor
-	fill_reduced_Y_vec!(buffers.Y_vec, X, M, loss, Val(N), Val(ncomps(M)))
-    
+	fill_reduced_Y_vec!(buffers.Y.vals, X, M, loss, Val(N), Val(ncomps(M)))
+
 	# Weights gradient
 	fill!(GU_λ[K+1], zero(TM))
-    columnwise_ttv_all_modes!(GU_λ[K+1], buffers.Y_vec, M.U, multinomial_coefs, Val(M.S), Val(N), Val(ncomps(M)))
+    columnwise_ttv_all_modes!(GU_λ[K+1], buffers.Y, M.U, multinomial_coefs, Val(M.S), Val(N), Val(ncomps(M)))
 
 	# Factor matrix gradients
 	for cell in 1:K
 		GU_T = zeros(TM, size(GU_λ[cell], 2), size(GU_λ[cell], 1))
-	    columnwise_ttv_all_modes_except_one!(GU_T, buffers.Y_vec, M.U, multinomial_coefs, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
+	    columnwise_ttv_all_modes_except_one!(GU_T, buffers.Y, M.U, multinomial_coefs, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
 	    GU_λ[cell] .= permutedims(GU_T)
 	    rmul!(GU_λ[cell], Diagonal(M.λ))
         GU_λ[cell] .+= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[cell]; dims=1)
@@ -283,9 +286,9 @@ function symgcp_symmetric_grad!(
 end
 
 function symgcp_symmetric_grad_multithread!(
-	GU_λ::NTuple{V, AbstractArray}, 
+	GU_λ::NTuple{V, AbstractArray},
 	M::SymCPD{TM,N,K},
-    X::Array{TX,N}, 
+    X::SymArray{TX,N,K},
 	loss,
 	multinomial_coefs::AbstractVector,
     γ,
@@ -296,16 +299,16 @@ function symgcp_symmetric_grad_multithread!(
 ) where {V,TM,TX,N,K}
 	
 	# Fill reduced derivative tensor
-	fill_reduced_Y_vec_multithreaded!(buffers.Y_vec, X, M, loss, iN_starts, vec_idx_starts, nthreads)
-    
+	fill_reduced_Y_vec_multithreaded!(buffers.Y.vals, X, M, loss, iN_starts, vec_idx_starts, nthreads)
+
 	# Weights gradient
 	fill!(GU_λ[K+1], zero(TM))
-    columnwise_ttv_all_modes_multithread!(GU_λ[K+1], buffers.Y_vec, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(N), Val(ncomps(M)))
+    columnwise_ttv_all_modes_multithread!(GU_λ[K+1], buffers.Y, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(N), Val(ncomps(M)))
     
 	# Factor matrix gradients
 	for cell in 1:K
 		GU_T = zeros(TM, size(GU_λ[cell], 2), size(GU_λ[cell], 1))
-        columnwise_ttv_all_modes_except_one_multithread!(GU_T, buffers.Y_vec, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
+        columnwise_ttv_all_modes_except_one_multithread!(GU_T, buffers.Y, M.U, multinomial_coefs, iN_starts, vec_idx_starts, nthreads, Val(M.S), Val(cell), Val(N), Val(ncomps(M)))
 	    GU_λ[cell] .= permutedims(GU_T)
 	    rmul!(GU_λ[cell], Diagonal(M.λ))
         GU_λ[cell] .+= mapslices(x -> 4γ * (norm(x)^2 - 1) * x, M.U[cell]; dims=1)
@@ -330,10 +333,10 @@ end
 function create_symgcp_sym_grad_buffers(
     M::SymCPD{TM,N,K}
 ) where {TM,N,K}
-    vec_size = prod(k -> prod(i -> size(M.U[k],1)+i-1, 1:count(M.S .== k))÷factorial(count(M.S .== k)), unique(M.S))
+    sizes = ntuple(k -> size(M.U[k], 1), Val(K))
     # Allocate buffers
     return (;
-        Y_vec = similar(M.U[1], vec_size)
+        Y = SymArray(similar(M.U[1], _packed_length(M.S, sizes)), M.S, sizes)
     )
 end
 
